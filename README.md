@@ -3,9 +3,11 @@
 <br />
 <div align="center">
   <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
-    <img alt="Made by Soph badge" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
+    <img alt="Made by Soph-k badge" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
   </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+
+  <!-- If public use this  -->
+  <!-- <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
     <img alt="MIT License badge" src="https://img.shields.io/github/license/soph-k/tiago-mapping-planning?style=for-the-badge" />
   </a>
   <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
@@ -13,6 +15,19 @@
   </a>
   <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
     <img alt="Repo size badge" src="https://img.shields.io/github/repo-size/soph-k/tiago-mapping-planning?style=for-the-badge" />
+  </a> -->
+  <!-- If private use this  -->
+  <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
+    <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/soph-k/tiago-mapping-planning/commits" target="_blank" rel="noopener noreferrer">
+    <img alt="Last commit" src="https://img.shields.io/badge/last%20commit-check%20history-informational?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
+    <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />
   </a>
 </div>
 <br /><br />
