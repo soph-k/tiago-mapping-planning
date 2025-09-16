@@ -50,8 +50,9 @@
 <!-- TABLE OF CONTENTS -->
 
 <!-- ## Table of Contents -->
-<br /><br />
-<details align="center">
+---
+---
+<details align="center"><h1>⌊ Table of Contents ⌋
   <h1><summary>⌊ Table of Contents ⌋</summary></h1>
   <ol>
     <li>
@@ -75,7 +76,8 @@
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
-<br /><br />
+---
+---
 
 
 <!-- ABOUT THE PROJECT -->
