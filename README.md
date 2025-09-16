@@ -50,10 +50,12 @@
 <!-- TABLE OF CONTENTS -->
 
 <!-- ## Table of Contents -->
----
----
-<details align="center"><h1>⌊ Table of Contents ⌋
-  <h1><summary>⌊ Table of Contents ⌋</summary></h1>
+
+<hr />
+
+<details>
+  <summary><strong>Table of Contents</strong></summary>
+
   <ol>
     <li>
       <a href="#about-the-project">About The Project</a>
