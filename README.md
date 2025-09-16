@@ -14,7 +14,7 @@
       <img alt="Last commit" src="https://img.shields.io/badge/last%20commit-see%20history-informational?style=for-the-badge" />
     </a>
     <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />
-  </div>
+  </div> -->
   <div >
     <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
       <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
@@ -28,7 +28,7 @@
     <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
       <img alt="Repo size" src="https://img.shields.io/github/repo-size/soph-k/tiago-mapping-planning?style=for-the-badge" />
     </a>
-  </div> -->
+  </div> z
 <!-- Badge End -->
 </div>
 <br /><br />
@@ -38,7 +38,7 @@
     <img src="./assets/images/logo.png" alt="Logo" width="80" height="80">
   </a>
 
-  <h3 align="center">Webots: TIAGo Mapping & Navigation</h3>
+  <h3 align="center">『 Webots: TIAGo Mapping & Navigation 』</h3>
 
   <p align="center">
     Simple TIAGo Mapping & Navigation with Behavior Trees.
@@ -51,11 +51,9 @@
 
 <!-- ## Table of Contents -->
 
-<hr />
-<hr />
+# ⫸ Table of Contents
 <details>
-  <summary><h3>Table of Contents<h3></summary>
-
+  <summary>Quick Links</summary>
   <ol>
     <li>
       <a href="#about-the-project">About The Project</a>
@@ -78,12 +76,10 @@
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
-<hr />
-<hr />
 
 
 <!-- ABOUT THE PROJECT -->
-## ▹ About The Project
+## ⫸ About The Project
 <a href="#about-the-project">
   <p align="center">
     <img src="./assets/images/screenshot.png" alt="Simulation screenshot" width="600">
