@@ -3,19 +3,32 @@
 <br />
 <div align="center">
 <!-- Badge Start -->
-
-<div align="center">
-  <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
-    <img alt="Made by Soph-k badge" src="https://img.shields.io/badge/Made%20by-Soph-K-ff69b4?style=for-the-badge" />
-  </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
-    <img alt="License" src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
-  </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning/commits" target="_blank" rel="noopener noreferrer">
-    <img alt="Last commit" src="https://img.shields.io/badge/last%20commit-see%20history-informational?style=for-the-badge" />
-  </a>
-  <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />
-</div>
+  <!-- <div>
+    <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
+      <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+      <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/soph-k/tiago-mapping-planning/commits" target="_blank" rel="noopener noreferrer">
+      <img alt="Last commit" src="https://img.shields.io/badge/last%20commit-see%20history-informational?style=for-the-badge" />
+    </a>
+    <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />
+  </div>
+  <div >
+    <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
+      <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+      <img alt="MIT License" src="https://img.shields.io/github/license/soph-k/tiago-mapping-planning?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
+      <img alt="Last commit" src="https://img.shields.io/github/last-commit/soph-k/tiago-mapping-planning?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
+      <img alt="Repo size" src="https://img.shields.io/github/repo-size/soph-k/tiago-mapping-planning?style=for-the-badge" />
+    </a>
+  </div> -->
 <!-- Badge End -->
 </div>
 <br /><br />
@@ -37,8 +50,9 @@
 <!-- TABLE OF CONTENTS -->
 
 <!-- ## Table of Contents -->
+<br /><br />
 <details align="center">
-  <summary><h3>⌊ Table of Contents ⌋</h3></summary>
+  <h1><summary>⌊ Table of Contents ⌋</summary></h1>
   <ol>
     <li>
       <a href="#about-the-project">About The Project</a>
@@ -61,6 +75,7 @@
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
+<br /><br />
 
 
 <!-- ABOUT THE PROJECT -->
