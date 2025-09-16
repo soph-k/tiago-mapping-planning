@@ -4,7 +4,7 @@
 <div align="center">
 <!-- Badge Start -->
   <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
-    <img alt="Made by Soph-k badge" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
+    <img alt="Made by Soph-k badge" src="https://img.shields.io/badge/Made%20by-Soph-K-ff69b4?style=for-the-badge" />
   </a>
   <!-- If public use this  -->
   <!-- <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
@@ -47,8 +47,8 @@
 <!-- TABLE OF CONTENTS -->
 
 <!-- ## Table of Contents -->
-<details>
-  <summary>Table of Contents</summary>
+<details  align="center">
+  <summary><h3>⌊ Table of Contents ⌋</h3></summary>
   <ol>
     <li>
       <a href="#about-the-project">About The Project</a>
