@@ -52,9 +52,9 @@
 <!-- ## Table of Contents -->
 
 <hr />
-
+<hr />
 <details>
-  <summary><strong>Table of Contents</strong></summary>
+  <summary><h3>Table of Contents<h3></summary>
 
   <ol>
     <li>
@@ -78,8 +78,8 @@
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
----
----
+<hr />
+<hr />
 
 
 <!-- ABOUT THE PROJECT -->
