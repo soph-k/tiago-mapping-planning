@@ -47,7 +47,7 @@
 <!-- TABLE OF CONTENTS -->
 
 <!-- ## Table of Contents -->
-<details  align="center">
+<details align="center">
   <summary><h3>⌊ Table of Contents ⌋</h3></summary>
   <ol>
     <li>
@@ -72,21 +72,22 @@
   </ol>
 </details>
 
+
 <!-- ABOUT THE PROJECT -->
 ## ▹ About The Project
 <a href="#about-the-project">
   <p align="center">
     <img src="./assets/images/screenshot.png" alt="Simulation screenshot" width="600">
   </p>
-  A Webots controller that builds a LiDAR map, inflates it to a configuration space, plans with A*, and navigates to multiple goals using a Behavior Tree via py_trees.
-  <p align="right">(<a href="#top">back to top</a>)</p>
+  <p>A Webots controller that builds a LiDAR map, inflates it to a configuration space, plans with A*, and navigates to multiple goals using a Behavior Tree via py_trees.</p>
 </a>
+
+
 ### Built With
 - <a href="https://cyberbotics.com/" target="_blank" rel="noopener noreferrer">Webots</a>
 - <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">Python 3.8+</a>
 - <a href="https://numpy.org/" target="_blank" rel="noopener noreferrer">NumPy</a>
 - <a href="https://py-trees.readthedocs.io/" target="_blank" rel="noopener noreferrer">py_trees</a>
-
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- GETTING STARTED -->
