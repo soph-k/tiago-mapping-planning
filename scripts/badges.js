@@ -9,14 +9,14 @@ const publicBadge = `
   <a href="https://github.com/${repo.split('/')[0]}" target="_blank" rel="noopener noreferrer">
     <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
   </a>
-  <a href="https://github.com/${REPO}/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
-    <img alt="MIT License" src="https://img.shields.io/github/license/${REPO}?style=for-the-badge" />
+  <a href="https://github.com/${repo}/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+    <img alt="MIT License" src="https://img.shields.io/github/license/${repo}?style=for-the-badge" />
   </a>
-  <a href="https://github.com/${REPO}" target="_blank" rel="noopener noreferrer">
-    <img alt="Last commit" src="https://img.shields.io/github/last-commit/${REPO}?style=for-the-badge" />
+  <a href="https://github.com/${repo}" target="_blank" rel="noopener noreferrer">
+    <img alt="Last commit" src="https://img.shields.io/github/last-commit/${repo}?style=for-the-badge" />
   </a>
-  <a href="https://github.com/${REPO}" target="_blank" rel="noopener noreferrer">
-    <img alt="Repo size" src="https://img.shields.io/github/repo-size/${REPO}?style=for-the-badge" />
+  <a href="https://github.com/${repo}" target="_blank" rel="noopener noreferrer">
+    <img alt="Repo size" src="https://img.shields.io/github/repo-size/${repo}?style=for-the-badge" />
   </a>
 </div>`;
 
@@ -25,10 +25,10 @@ const privateBadge = `
   <a href="https://github.com/${repo.split('/')[0]}" target="_blank" rel="noopener noreferrer">
     <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
   </a>
-  <a href="https://github.com/${REPO}/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+  <a href="https://github.com/${repo}/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
   </a>
-  <a href="https://github.com/${REPO}/commits" target="_blank" rel="noopener noreferrer">
+  <a href="https://github.com/${repo}/commits" target="_blank" rel="noopener noreferrer">
     <img alt="Last commit" src="https://img.shields.io/badge/last%20commit-see%20history-informational?style=for-the-badge" />
   </a>
   <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />

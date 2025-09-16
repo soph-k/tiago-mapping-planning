@@ -17,7 +17,7 @@
     <img alt="Repo size badge" src="https://img.shields.io/github/repo-size/soph-k/tiago-mapping-planning?style=for-the-badge" />
   </a> -->
   <!-- If private use this  -->
-  <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+  <!-- <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
   </a>
   <a href="https://github.com/soph-k/tiago-mapping-planning/commits" target="_blank" rel="noopener noreferrer">
@@ -25,7 +25,7 @@
   </a>
   <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
     <img alt="Repo size" src="https://img.shields.io/badge/repo%20size-private-lightgrey?style=for-the-badge" />
-  </a>
+  </a> -->
   <!-- Badge End -->
 </div>
 <br /><br />
