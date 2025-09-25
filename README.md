@@ -51,7 +51,7 @@
 
 <!-- ## Table of Contents -->
 
-## ▻ Table of Contents
+## ❐ Table of Contents
 <details>
   <summary>Quick Links</summary>
   <ol>
@@ -79,7 +79,7 @@
 
 
 <!-- ABOUT THE PROJECT -->
-## ▻ About The Project
+## ❐ About The Project
 <a href="#about-the-project">
   <p align="center">
     <img src="./assets/images/screenshot.png" alt="Simulation screenshot" width="600">
@@ -88,7 +88,7 @@
 </a>
 
 
-### ▻ Built With
+###  Built With
 - <a href="https://cyberbotics.com/" target="_blank" rel="noopener noreferrer">Webots</a>
 - <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">Python 3.8+</a>
 - <a href="https://numpy.org/" target="_blank" rel="noopener noreferrer">NumPy</a>
@@ -100,11 +100,11 @@
 
 Instructions to set up this project locally.
 
-### ⍤ Prerequisites
+### ❐ Prerequisites
 Have Webots installed and Python 3.8+ available as the controller interpreter.  
 In Webots: **Preferences → Python** and point to your Python interpreter.
 
-### ▹ Installation
+### ❐ Installation
 Clone the repo and install dependencies:
 ```sh
 git clone https://github.com/soph-k/tiago-mapping-planning.git

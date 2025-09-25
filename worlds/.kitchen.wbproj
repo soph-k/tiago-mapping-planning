@@ -5,10 +5,13 @@ sceneTreePerspectives: 000000ff00000001000000030000001e000000c0000000fa010000000
 maximizedDockId: -1
 centralWidgetVisible: 1
 projectionMode: ORTHOGRAPHIC
-orthographicViewHeight: 6.52429
-textFiles: 0 "controllers/main/main.py"
+orthographicViewHeight: 7.17672
+textFiles: 0 "main.py"
 globalOptionalRendering: LidarRaysPaths::LidarPointClouds
 consoles: Console:All:All
+renderingDevicePerspectives: TIAGo LITE:Astra depth;0;0.552083;0.0277778;0.364458
+renderingDevicePerspectives: TIAGo LITE:Astra rgb;0;1;0;0
+renderingDevicePerspectives: TIAGo LITE:display;1;1;0;0
 renderingDevicePerspectives: TIAGo:Astra depth;0;0.525616;0.238869;0.200328
 renderingDevicePerspectives: TIAGo:camera;1;0.450382;0;0.61315
 renderingDevicePerspectives: TIAGo:display;1;0.77;0;0
