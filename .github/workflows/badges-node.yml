@@ -23,7 +23,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           IS_PRIVATE: ${{ github.event.repository.private }}
-        run: node scripts/badges.js
+        run: node assets/scripts/badges.js
 
       - name: Commit README update
         run: |
