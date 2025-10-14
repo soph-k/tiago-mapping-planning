@@ -1,6 +1,3 @@
-###############################################################################
-# ------------------------- Imports  -----------------------------------------
-###############################################################################
 from __future__ import annotations                # Used in webots and older versions of python.
 import os                                         # For device stuff.
 import time                                       # Times stamps etc.
@@ -14,6 +11,8 @@ import numpy as np                                # For math and arrays.
 ################################################################################
 # =============================== Math utilities ===============================
 ################################################################################
+# Small math helpers for robots.
+# Normalize angles and get 2D distance.
 def NormalizeAngle(angle: float) -> float:        # Normalize angle to -pi, pi to avoid wrap around issues.
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
@@ -25,6 +24,8 @@ def Distance2D(point1, point2) -> float:          # Euclidean distance between t
 ##################################################################################
 # ------------------------ World to Grid coordinate transforms -------------------
 ##################################################################################
+# Convert between world meters and grid cells.
+# Includes Bresenham line for rays and paths.
 def WorldToGridRaw(world_x: float, world_y: float) -> Tuple[int, int]:
     row = int(40.0 * (world_x + 2.25))            # Meters to grid rows 
     col = int(-52.9 * (world_y - 1.6633))         # Meters to grid cols 
@@ -48,13 +49,6 @@ def GridToWorld(row: int, col: int) -> Tuple[float, float]:
     world_y = -col / 52.9 + 1.6633                # Map grid col to world Y.
     return world_x, world_y                       # Return world coordinates
 
-# def IsWorldCoordInBounds(
-#     world_x: float,
-#     world_y: float,
-#     map_shape: Tuple[int, int] = (200, 300),
-# ) -> bool:
-#     row, col = WorldToGridRaw(world_x, world_y)
-#     return 0 <= row < map_shape[0] and 0 <= col < map_shape[1]
 
 def BresenhamLine(x0: int, y0: int, x1: int, y1: int) -> List[Tuple[int, int]]:
     points: List[Tuple[int, int]] = []            # Output list grid points along the line
@@ -90,7 +84,8 @@ def UpdateTrajectory(
 ################################################################################
 # =============================== Path for files ===============================
 ################################################################################
-
+# Helpers for saving and loading files safely.
+# Stops path tricks and makes folders if missing.
 def ResolveMapPath(filename: str) -> Path:
     if ("/" in filename) or ("\\" in filename):                   # Disallow path separators for safety
         raise ValueError(f"Error filename: {filename}")           # Guard against path traversal
@@ -108,29 +103,33 @@ def EnsureParentDirectories(path: str | Path) -> Path:
 ################################################################################
 # ================================ Type aliases ================================
 ################################################################################
+# Short names for common types.
+# Keeps function headers clear.
 Position2D = Tuple[float, float]                                   # X and Y in world coordinates
 PathType = List[Position2D]                                        # Sequence of 2D positions
 MapArray = np.ndarray                                              # Alias for numpy map arrays
-TH_FREE_PLANNER = 0.45                                             # Threshold used by planner for free cells
+TH_FREE_PLANNER = 0.2                                              # Threshold used by planner for free cells
 
 
 ################################################################################
 # ============================= Parameter containers ===========================
 ################################################################################
+# Tunable settings for mapping and planning.
+# Defaults and hooks live here.
 @dataclass
 class MappingParams:
     th_occupied: float = 0.75                                       # Prob for obstacle
     th_free_planner: float = TH_FREE_PLANNER                        # Prob free for planning
-    th_free_explore: float = 0.35                                   # Slightly looser free threshold for exploration
+    th_free_explore: float = 0.15                                   # Slightly looser free threshold for exploration
     robot_radius: float = 0.15                                      # Robot radius in meters
-    safety_margin: float = 0.00                                     # Extra margin added to radius
+    safety_margin: float = 0.05                                     # Extra margin added to radius
     map_resolution_m: float = 0.02                                  # Map cell size
     default_map_shape: Tuple[int, int] = (200, 300)                 # Fallback grid size 
-    cspace_inflation_scale: float = 0.35                            # Inflation scale for c-space obstacles
+    cspace_inflation_scale: float = 1.0                             # Inflation scale for c-space obstacles
     cspace_core_obstacle_value: float = 1.0                         # Value assigned to hard obstacles in c-space
     cspace_morph_closing: int = 0                                   
     cspace_morph_iters: int = 0                                     # Number of iterations
-    cspace_downsample: int = 2                                      # Downsampling factor applied to c-space
+    cspace_downsample: int = 1                                      # Downsampling factor applied to c-space
     mapping_interval: int = 6                                       # Build/refresh c-space every N frames
     lidar_offset_x: float = 0.202                                   # Lidar sensor x-offset from robot base
     lidar_update_interval: int = 2                                  # Only use every Nth Lidar frame
@@ -165,6 +164,8 @@ class PlanningParams:
 ################################################################################
 # ================================== Logging ===================================
 ################################################################################
+# Tiny logger with module levels.
+# Use SetLogLevel to change detail.
 class LogLevel:
     ERROR, WARNING, INFO, DEBUG, VERBOSE = range(5)           
 
@@ -231,16 +232,12 @@ def SetLogLevel(level: int | str, module: Optional[str] = None) -> None:
 
 
 ################################################################################
-# Assumes needed imports/types exist elsewhere:
-# from enum import Enum
-# from typing import Any, Dict, Optional, List
-# import time, traceback
-# main_logger, MapArray, PathType, Position2D are assumed to be defined.
-
-################################################################################
 # ================================ Blackboard keys =============================
 ################################################################################
+# All shared keys in one place.
+# Producers and consumers stay in sync.
 class BBKey(str, Enum):                              # Enum of string keys used to access data on the blackboard
+    # === ROBOT HARDWARE ===
     ROBOT = "robot"                                  # Robot controller / handle
     GPS = "gps"                                      # GPS sensor
     COMPASS = "compass"                              # Compass sensor
@@ -250,26 +247,35 @@ class BBKey(str, Enum):                              # Enum of string keys used 
     DISPLAY = "display"                              # Display device / UI
     TIMESTEP = "timestep"                            # Simulation or control timestep
     INIT_Z = "init_z"                                # Initial Z height/offset
+  
+    # === MAPPING DATA ===
     PROB_MAP = "prob_map"                            # Probability map (e.g., occupancy grid)
     CSPACE = "cspace"                                # Configuration space grid
+    MAP_SAVED = "map_saved"                          # Flag indicating map persisted
+    MAP_READY = "map_ready"                          # Flag indicating map is ready/complete
+    CSPACE_FROZEN = "cspace_frozen"                  # Flag indicating cspace should not update
+    
+    # === NAVIGATION DATA ===
     START_XY = "start_xy"                            # Start position (x, y)
     PLANNED_PATH = "planned_path"                    # Planned path data structure
     NAVIGATION_GOALS = "navigation_goals"            # List of navigation goal points
     NAVIGATION_GOAL = "navigation_goal"              # Current navigation goal
     TRAJECTORY_POINTS = "trajectory_points"          # Executed/desired trajectory points
-    STOP_MAPPING = "stop_mapping"                    # Flag to stop mapping process
-    EMERGENCY_STOP = "emergency_stop"                # Emergency stop flag
-    MAX_MAPPING_STEPS = "max_mapping_steps"          # Cap on mapping iterations
-    MAP_SAVED = "map_saved"                          # Flag indicating map persisted
-    MAP_READY = "map_ready"                          # Flag indicating map is ready/complete
-    CSPACE_FROZEN = "cspace_frozen"                  # Flag indicating cspace should not update
+    
+    # === DISPLAY CONTROL ===
     DISPLAY_MODE = "display_mode"                    # UI display mode
     ALLOW_CSPACE_DISPLAY = "allow_cspace_display"    # Permission to show cspace overlay
+    
+    # === TRANSFORM DATA ===
+    WORLD_TO_GRID = "world_to_grid"                  # World to grid coordinate transform
+    GRID_TO_WORLD = "grid_to_world"                  # Grid to world coordinate transform
 
 
 ################################################################################
 # ================================= Blackboard =================================
 ################################################################################
+# Simple shared store for modules and nodes.
+# Typed helpers plus easy get and set.
 class Blackboard:
     def __init__(self):
         self.data: Dict[str, Any] = {}                # Internal storage dictionary for all key/value pairs
@@ -309,7 +315,6 @@ class Blackboard:
             self.Set(k, None)                         # Clear mission related pointers
         self.Set(BBKey.TRAJECTORY_POINTS, [])         # Reset trajectory to empty list
         for k, v in [
-            ("stop_mapping", False),
             ("allow_cspace_display", False),
             ("map_saved", False),
             ("display_mode", "full"),
@@ -362,6 +367,8 @@ def SetGlobalBlackboard(new_blackboard: Blackboard) -> None:
 ################################################################################
 # ================================== BT core ===================================
 ################################################################################
+# Base class and states for behavior trees.
+# Handles tick errors pause and halt.
 class Status(Enum):                                   # Execution states for behavior tree nodes
     SUCCESS = "SUCCESS"                               # Completed successfully
     FAILURE = "FAILURE"                               # Completed unsuccessfully
@@ -431,6 +438,8 @@ class BehaviorNode:
 ################################################################################
 # ================================= Composites =================================
 ################################################################################
+# Selector sequence and parallel control child flow.
+# Gives short circuit order and threshold parallel run.
 class _Composite(BehaviorNode):
     def __init__(self, name: str, children: Optional[List[BehaviorNode]] = None):
         super().__init__(name)                        # Initialize base node state
@@ -530,6 +539,8 @@ class Parallel(BehaviorNode):
 ################################################################################
 # ================================ Rate limiters ===============================
 ################################################################################
+# Limits work by count or time.
+# Good for periodic tasks and expensive steps.
 class TimeBasedRateLimiter:
     def __init__(self, interval_seconds: float = 5.0):
         self.interval = interval_seconds              # Minimum seconds between allowed executions
