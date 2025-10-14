@@ -82,3 +82,97 @@ def UpdateTrajectory(
         trajectory.append(point)
     return trajectory[-max_points:]
 
+################################################################################
+# =============================== Path for files ==============================
+###############################################################################
+def ResolveMapPath(filename: str) -> Path:
+    if ("/" in filename) or ("\\" in filename):
+        raise ValueError(f"Error filename: {filename}")
+    maps_dir = Path(__file__).parent / "maps"
+    maps_dir.mkdir(exist_ok=True)
+    return (maps_dir / filename).resolve()
+
+def EnsureParentDirectories(path: str | Path) -> Path:
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    return path_obj
+
+################################################################################
+# ================================ Type aliases ================================
+#################################################################################
+Position2D = Tuple[float, float]
+PathType = List[Position2D]
+MapArray = np.ndarray
+
+TH_FREE_PLANNER = 0.45
+
+
+
+
+
+################################################################################
+# ================================== Logging ===================================
+################################################################################
+class LogLevel:
+    ERROR, WARNING, INFO, DEBUG, VERBOSE = range(5)
+
+_LOG_LEVEL_MAP = {
+    "ERROR": 0,
+    "WARNING": 1,
+    "INFO": 2,
+    "DEBUG": 3,
+    "VERBOSE": 4,
+}
+LOG_LEVEL = _LOG_LEVEL_MAP.get(
+    os.environ.get("ROBOT_LOG_LEVEL", "INFO").upper(),
+    LogLevel.INFO,
+)
+
+
+class Logger:
+    def __init__(self, name: str = "ROBOT", level: Optional[int] = None):
+        self.name = name
+        self.level = level
+
+    def IsLevelEnabled(self, level: int) -> bool:
+        current_level = self.level if self.level is not None else LOG_LEVEL
+        return current_level >= level
+
+    def Log(self, level: int, tag: str, message: Any) -> None:
+        if self.IsLevelEnabled(level):
+            print(f"[{tag}] {self.name}: {message}")
+
+    def Error(self, message: Any) -> None:
+        self.Log(LogLevel.ERROR, "ERROR", message)
+
+    def Warning(self, message: Any) -> None:
+        self.Log(LogLevel.WARNING, "WARNING", message)
+
+    def Info(self, message: Any) -> None:
+        self.Log(LogLevel.INFO, "INFO", message)
+
+    def Debug(self, message: Any) -> None:
+        self.Log(LogLevel.DEBUG, "DEBUG", message)
+nav_logger = Logger("NAV")
+map_logger = Logger("MAP")
+plan_logger = Logger("PLAN")
+main_logger = Logger("MAIN")
+
+
+def SetLogLevel(level: int | str, module: Optional[str] = None) -> None:
+    level_value = _LOG_LEVEL_MAP[level.upper()] if isinstance(level, str) else int(level)
+    global LOG_LEVEL
+    if module is None:
+        LOG_LEVEL = level_value
+        return
+    loggers = {
+        "nav": nav_logger,
+        "map": map_logger,
+        "plan": plan_logger,
+        "main": main_logger,
+    }
+    if logger := loggers.get(module.lower()):
+        logger.level = level_value
+    else:
+        main_logger.Warning(f"Unknown module '{module}'; valid: {list(loggers.keys())}")
+
