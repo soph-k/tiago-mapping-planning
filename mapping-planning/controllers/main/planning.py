@@ -362,3 +362,257 @@ def Downsample(pth, cap=40):
         slim = slim + [pth[-1]]
     return slim
 
+
+###############################################################################
+# --- Adaptive planning -------------------------------------------------------
+###############################################################################
+def AdaptiveParams(cs, start, goal, p: PlanningParams):
+    free = int((cs > p.th_free_planner).sum())
+    total = cs.size
+    occ_pct = (100.0 * free / total)
+    dense = (100 - occ_pct) > 40
+    sparse = (100 - occ_pct) < 10
+    dist = heuristic(start, goal)
+    out = {
+        "max_iterations": p.max_iterations,
+        "max_open_set_size": p.max_open_set_size,
+        "heuristic_weight": p.heuristic_weight
+    }
+    if dense:
+        out["max_iterations"] = int(p.max_iterations * 0.7)
+        out["max_open_set_size"] = int(p.max_open_set_size * 0.8)
+        out["heuristic_weight"] = 1.1
+    elif sparse:
+        out["max_iterations"] = int(p.max_iterations * 1.5)
+        out["heuristic_weight"] = 0.9
+    if dist > min(cs.shape) * 0.5:
+        out["heuristic_weight"] = min(out["heuristic_weight"] * 1.2, 1.5)
+    return out
+
+def adaptive_a_star(cs, start, goal, p: PlanningParams):
+    tries = [
+        AdaptiveParams(cs, start, goal, p),
+        {
+            "max_iterations": p.adaptive_max_iterations,
+            "max_open_set_size": p.adaptive_max_open_set_size,
+            "heuristic_weight": p.adaptive_heuristic_weight
+        },
+        {
+            "max_iterations": p.adaptive_max_iterations,
+            "max_open_set_size": p.adaptive_max_open_set_size,
+            "heuristic_weight": 2.0
+        },
+    ]
+    for i, kw in enumerate(tries):
+        plan_logger.Info(f"Trying adaptive_a_star attempt {i+1}/3 with params: {kw}")
+        path = a_star(cs, start, goal, p, **kw)
+        if path:
+            plan_logger.Info(f"Adaptive A* succeeded on attempt {i+1} with {len(path)} waypoints")
+            return path
+        else:
+            plan_logger.Warning(f"Adaptive A* attempt {i+1} failed")
+    plan_logger.Error("All adaptive A* attempts failed")
+    return []
+
+###############################################################################
+# --- Public API --------------------------------------------------------------
+###############################################################################
+def plan_path(cs, start_w, goal_w, p: PlanningParams, smooth=True,
+              optimize_for_differential_drive=True, check_neighbors=None,
+              max_search_radius=None, **_):
+    if check_neighbors is None:
+        check_neighbors = p.check_neighbor_safety
+    if max_search_radius is None:
+        max_search_radius = p.safe_waypoint_search_radius
+    W2G = getattr(p, 'W2G', blackboard.Get("world_to_grid"))
+    G2W = getattr(p, 'G2W', blackboard.Get("grid_to_world"))
+    sr, sc = W2G(*start_w, cs.shape)
+    gr, gc = W2G(*goal_w, cs.shape)
+    ns = NearestFreeCell(cs, sr, sc, p, max_radius=max_search_radius, check_neighbors=check_neighbors)
+    if ns is None:
+        plan_logger.Error(f"No safe start found at ({sr}, {sc})")
+        return []
+    sr, sc = ns
+    plan_logger.Info(f"Found safe start at ({sr}, {sc})")
+    ng = NearestFreeCell(cs, gr, gc, p, max_radius=max_search_radius, check_neighbors=check_neighbors)
+    if ng is None:
+        plan_logger.Error(f"No safe goal found at ({gr}, {gc})")
+        return []
+    gr, gc = ng
+    plan_logger.Info(f"Found safe goal at ({gr}, {gc})")
+    if has_line_of_sight((sr, sc), (gr, gc), cs, p):
+        return [start_w, goal_w]
+    path = adaptive_a_star(cs, (sr, sc), (gr, gc), p)
+    if not path:
+        plan_logger.Error(f"Planning failed from ({sr}, {sc}) to ({gr}, {gc})")
+        return []
+    plan_logger.Info(f"Planning succeeded with {len(path)} waypoints")
+    if optimize_for_differential_drive and p.optimize_for_differential_drive and len(path) > 2:
+        path = optimize_path_for_differential_drive(path, cs, p)
+    if smooth and len(path) > 2:
+        path = smooth_path(path, cs, p)
+    path = Downsample(path, cap=40)
+    out = []
+    for r, c in path:
+        out.append(G2W(r, c))
+    if out[-1] != goal_w:
+        out.append(goal_w)
+    return out
+
+###############################################################################
+# --- Reachability analysis ---------------------------------------------------
+###############################################################################
+def reachable_mask_from(cs, start_world, p: PlanningParams, threshold=None, connectivity=8):
+    if start_world is None:
+        return None
+    W2G = getattr(p, 'W2G', blackboard.Get("world_to_grid"))
+    r0, c0 = W2G(*start_world, cs.shape)
+    t = Thr(threshold, p)
+    h, w = cs.shape
+    if (not Inb(h, w, r0, c0)) or cs[r0, c0] <= t:
+        near = NearestFreeCell(cs, r0, c0, p, threshold=t, max_radius=6, check_neighbors=False)
+        if near is None:
+            return np.zeros((h, w), dtype=bool)
+        r0, c0 = near
+    vis = np.zeros((h, w), dtype=bool)
+    stack = [(r0, c0)]
+    while stack:
+        r, c = stack.pop()
+        if (not Inb(h, w, r, c)) or vis[r, c] or cs[r, c] <= t:
+            continue
+        vis[r, c] = True
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                if connectivity == 4 and dr != 0 and dc != 0:
+                    continue
+                stack.append((r + dr, c + dc))
+    return vis
+
+def find_safe_positions(cs, p: PlanningParams, num_positions=10, threshold=None,
+                        restrict_to_reachable_from=None, check_neighbors=True, max_attempts=None):
+    out = []
+    h, w = cs.shape
+    t = min(1.0, Thr(threshold, p) + 0.05)
+    if max_attempts is None:
+        max_attempts = num_positions * 20
+    if restrict_to_reachable_from is not None:
+        reach = reachable_mask_from(cs, restrict_to_reachable_from, p, threshold=t)
+    else:
+        reach = None
+    G2W = getattr(p, 'G2W', blackboard.Get("grid_to_world"))
+    tries = 0
+    while tries < max_attempts:
+        tries += 1
+        r = np.random.randint(10, h - 10)
+        c = np.random.randint(10, w - 10)
+        if reach is not None and not reach[r, c]:
+            continue
+        if cs[r, c] > t and is_free_with_neighbors(cs, r, c, p, threshold=t, check_neighbors=check_neighbors):
+            xw, yw = G2W(r, c)
+            too_close = False
+            for ex, ey in out:
+                if np.hypot(xw - ex, yw - ey) < 0.5:
+                    too_close = True
+                    break
+            if not too_close:
+                out.append((xw, yw))
+                if len(out) >= num_positions:
+                    break
+    return out
+
+
+###############################################################################
+# --- Validation and visualization --------------------------------------------
+###############################################################################
+def validate_path(path_w, cs, p: PlanningParams):
+    if len(path_w) < 2:
+        return True
+    W2G = getattr(p, 'W2G', blackboard.Get("world_to_grid"))
+    for i, (x, y) in enumerate(path_w):
+        r, c = W2G(x, y, cs.shape)
+        ok = is_free_with_neighbors(cs, r, c, p, check_neighbors=p.check_neighbor_safety)
+        if not ok:
+            plan_logger.Error(f"Invalid waypoint {i} at ({x:.2f}, {y:.2f})")
+            return False
+    for i in range(len(path_w) - 1):
+        r0, c0 = W2G(*path_w[i], cs.shape)
+        r1, c1 = W2G(*path_w[i + 1], cs.shape)
+        if not has_line_of_sight((r0, c0), (r1, c1), cs, p):
+            plan_logger.Error(f"No LoS between waypoints {i} and {i + 1}")
+            return False
+    return True
+
+def visualize_path_on_map(cs, path_w, save_path="path_visualization.npy"):
+    vis = cs.copy()
+    W2G = blackboard.Get("world_to_grid")
+    for x, y in path_w:
+        r, c = W2G(x, y, cs.shape)
+        if Inb(cs.shape[0], cs.shape[1], r, c):
+            vis[r, c] = 2.0
+    pth = RESMAP(save_path)
+    ENSURE(pth)
+    np.save(pth, vis)
+    return vis
+
+
+###############################################################################
+# --- BT node -----------------------------------------------------------------
+###############################################################################
+class MultiGoalPlannerBT(BehaviorNode):
+    def __init__(self, params: PlanningParams, goals_key="navigation_goals",
+                 path_key="planned_path", bb=None):
+        super().__init__("MultiGoalPlanner")
+        self.params = params
+        self.goals_key = goals_key
+        self.path_key = path_key
+        self.bb = bb or blackboard
+        self.params.W2G = self.bb.Get("world_to_grid")
+        self.params.G2W = self.bb.Get("grid_to_world")
+
+    def reset(self):
+        super().reset()
+        self.bb.Set(self.path_key, None)
+
+    def execute(self):
+        try:
+            gps = self.bb.GetGps()
+            goals = self.bb.Get(self.goals_key)
+            cs = self.bb.GetCspace()
+            if not gps:
+                plan_logger.Error("GPS not available")
+                return Status.FAILURE
+            if not goals:
+                plan_logger.Error("No goals set")
+                return Status.FAILURE
+            if cs is None:
+                plan_logger.Error("No cspace")
+                return Status.FAILURE
+            x, y = gps.getValues()[:2]
+            plan_logger.Info(f"Planning with {len(goals)} goals")
+            if self.params.verbose:
+                for i, (gx, gy) in enumerate(goals[:3]):
+                    plan_logger.Info(f" Goal {i + 1}: ({gx:.3f}, {gy:.3f})")
+                if len(goals) > 3:
+                    plan_logger.Info(f" ... and {len(goals) - 3} more goals")
+            goals_sorted = sorted(goals, key=lambda pxy: np.hypot(pxy[0] - x, pxy[1] - y))
+            for g in goals_sorted:
+                try:
+                    seg = plan_path(cs, (x, y), g, self.params, smooth=True)
+                except Exception:
+                    continue
+                if not seg:
+                    continue
+                if self.params.path_validation_enabled and (not validate_path(seg, cs, self.params)):
+                    continue
+                self.bb.Set(self.path_key, seg)
+                plan_logger.Info(f"Planned path with {len(seg)} waypoints.")
+                if self.params.verbose:
+                    plan_logger.Info(f" Path start: ({seg[0][0]:.3f},{seg[0][1]:.3f}) → end: ({seg[-1][0]:.3f},{seg[-1][1]:.3f})")
+                return Status.SUCCESS
+            plan_logger.Error("Planning failed - no candidate goal yielded a valid path.")
+            return Status.FAILURE
+        except Exception as e:
+            plan_logger.Error(f"Exception: {e}")
+            return Status.FAILURE

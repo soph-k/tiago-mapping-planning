@@ -1,6 +1,3 @@
-###############################################################################
-# ------------------------- Imports  -----------------------------------------
-###############################################################################
 from __future__ import annotations
 from controller import Supervisor
 import numpy as np
@@ -33,9 +30,6 @@ from mapping import LidarMappingBT
 from planning import validate_path, visualize_path_on_map, find_safe_positions, MultiGoalPlannerBT
 
 
-###############################################################################
-# ------------------------- Utilities -----------------------------------------
-###############################################################################
 def GetFromBlackboard(key, default=None):
     return blackboard.Get(key, default)
 
@@ -504,7 +498,7 @@ class SaveMap(BehaviorNode):
         return np.clip(c.astype(np.float32), 0.0, 1.0)                 
 
     def ShouldSaveMap(self, cspace: np.ndarray) -> bool:
-        return CalculateFreeSpacePercentage(cspace) * 100.0 >= 1.0      # Save only if at least 1% of space is free
+        return CalculateFreeSpacePercentage(cspace) * 100.0 >= 0.1      # Save if at least 0.1% of space is free (more lenient)
 
     def SaveMapToFile(self, cspace: np.ndarray) -> bool:
         try:
@@ -625,8 +619,8 @@ class ValidateLoadedMap(BehaviorNode):
         if c is None:                                                   # If map is missing then invalid
             return Status.FAILURE
         free_pct = 100.0 * CalculateFreeSpacePercentage(c)              # Percentage of free cells
-        if free_pct < 1.0:                                            
-            main_logger.Error(f"Loaded map looks wrong: free={free_pct:.2f}% (<1%).")
+        if free_pct < 0.1:                                            
+            main_logger.Error(f"Loaded map looks wrong: free={free_pct:.2f}% (<0.1%).")
             return Status.FAILURE
         return Status.SUCCESS                                           
 
