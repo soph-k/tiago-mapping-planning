@@ -2,6 +2,42 @@ from __future__ import annotations
 from controller import Supervisor
 import numpy as np
 from os.path import exists
+from core import (
+    MappingParams,
+    PlanningParams,
+    main_logger,
+    SetLogLevel,
+    LogLevel,
+    NormalizeAngle,
+    Distance2D,
+    WorldToGrid,
+    GridToWorld,
+    UpdateTrajectory,
+    ResolveMapPath,
+    EnsureParentDirectories,
+    BehaviorNode,
+    Status,
+    Sequence,
+    Selector,
+    Parallel,
+    blackboard,
+    EveryNSeconds,
+    BBKey,
+    TH_FREE_PLANNER,
+)
+from navigation import ObstacleAvoidingNavigation, SafeSetMotorVelocities, StopMotors
+
+
+def GetFromBlackboard(key, default=None):
+    return blackboard.Get(key, default)
+
+def CalculateFreeSpacePercentage(cspace: np.ndarray) -> float:
+    free_cells = float((cspace > TH_FREE_PLANNER).sum())
+    return free_cells / float(cspace.size)
+
+def MapToDisplayCoords(row: int, col: int, map_shape: tuple, w: int, h: int) -> tuple[int, int]:
+    return int(row * w / map_shape[0]), int(col * h / map_shape[1])
+
 
 ###############################################################################
 # ============================== Helpers ======================================
@@ -313,14 +349,12 @@ def WorldBoundsFromConfig(shape=(200, 300)):
     x_max, y_min = GridToWorld(h - 1, w - 1)                            # Convert bottom right grid cell to world coords
     return x_min, y_min, x_max, y_max                                   # Return world-space bounds
 
-
 def BuildEllipsePoints(center=(-0.65, -1.43), rx=1.05, ry=1.25, num_points=12, rotation=0.0):
     cx, cy = center                                                     # Center of the world coords
     ang = np.linspace(0, 2 * np.pi, num_points, endpoint=False) + rotation  # Spaced angles with rotation
     return [(cx + rx * np.cos(a),                                       # X coordinate
              cy + ry * np.sin(a))                                       # Y coordinate
             for a in ang]                                               # Generate one x and y for each angle
-
 
 def BuildPerimeterLoop(margin=None, include_midpoints=True):
     x_min, y_min, x_max, y_max = WorldBoundsFromConfig()                # Get world bounds of the map
@@ -337,14 +371,12 @@ def BuildPerimeterLoop(margin=None, include_midpoints=True):
     if include_midpoints: pts += [(left, mid_y)]              
     return pts                                                          # Return loop as a list of waypoints
 
-
 def OrderFromStart(points, start_position, close_loop=True):
     sx, sy = start_position                                             # Extract starting world coordinates
     d = [np.hypot(x - sx, y - sy) for (x, y) in points]                 # Compute Euclidean distance to each point
     i = int(np.argmin(d))                                               # Find index of nearest point to start position
     ordered = points[i:] + points[:i]                                   # Rotate list so nearest point is first
     return ordered + [start_position] if close_loop else ordered  
-
 
 def ClampGoal(goal_x, goal_y, cspace=None):
     if cspace is None:                                                  # If no c-space provided, nothing to clamp
@@ -357,6 +389,7 @@ def ClampGoal(goal_x, goal_y, cspace=None):
         min(max(goal_x, x_min + buf), x_max - buf),                     # Clamp goal_x between 
         min(max(goal_y, y_min + buf), y_max - buf),                     # Clamp goal_y between
     )                                                                   # Return clamped goal coordinates
+
 
 ################################################################################
 # ========================== Behavior Tree Nodes ===============================
@@ -401,7 +434,7 @@ class MapExistsOrReady(BehaviorNode):
         self.path = str(ResolveMapPath(path))                           # Path to map file
 
     def execute(self):
-        return Status.SUCCESS if (GetFromBlackboard("map_ready", False) or exists(self.path)) else Status.FAILURE  # Succeeds if either flag or file says so
+        return Status.SUCCESS if (GetFromBlackboard("map_ready", False) or exists(self.path)) else Status.FAILURE  # Succeeds if either flag 
 
 class LoadMap(BehaviorNode):
     def __init__(self, path="cspace.npy"):
@@ -499,7 +532,6 @@ class SaveMap(BehaviorNode):
         self.UpdateMapState(c)                                        
         return Status.SUCCESS                                           # Success
 
-
 class DisplayUpdater(BehaviorNode):
     def __init__(self):
         super().__init__("DisplayUpdater")                              # Name the node
@@ -558,10 +590,10 @@ class NavigateToWaypoints(BehaviorNode):
     def execute(self):
         planned_path = GetFromBlackboard("planned_path")                # Retrieve path from planning stage
         if not planned_path:                                            # No path available is an error
-            main_logger.Error("NavigateToWaypoints: no planned path available.")
+            main_logger.Error("No planned path available.")
             return Status.FAILURE
         if self.navigator is None:                                      # Create controller on first run
-            self.navigator = ObstacleAvoidingNavigation(planned_path, bb=blackboard, traversal="continuous")
+            self.navigator = ObstacleAvoidingNavigation(planned_path, bb=blackboard, traversal="once")
         status = self.navigator.execute()                               # Step the controller
         if status == Status.SUCCESS:                                    # If finished
             self.navigator = None                                       # Reset for next time
@@ -620,7 +652,7 @@ class ContinuousFreeRoam(BehaviorNode):
             main_logger.Info(f"FreeRoam: planning attempt {self.planning_attempts}/{self.max_planning_attempts}")
             gps = GetFromBlackboard("gps")                              # Position source
             current_pos = gps.getValues()[:2] if gps else None         
-            safe_goals = FindSafePositions(                             # Sample a few safe goals
+            safe_goals = find_safe_positions(                             # Sample a few safe goals
                 cspace,
                 self.params,
                 num_positions=3,
@@ -636,7 +668,7 @@ class ContinuousFreeRoam(BehaviorNode):
                     planned_path = GetFromBlackboard("planned_path")     # Retrieve path
                     if planned_path:                                     # If path available
                         self.current_navigator = ObstacleAvoidingNavigation(  # Start following
-                            planned_path, bb=blackboard, traversal="continuous"
+                            planned_path, bb=blackboard, traversal="once"
                         )
                         main_logger.Info("Planning worked, following path.")
                         return Status.RUNNING                             # Continue running navigator
@@ -705,7 +737,7 @@ class ContinuousFreeRoam(BehaviorNode):
             ml = GetFromBlackboard("motorL")                             # Left motor handle
             mr = GetFromBlackboard("motorR")                             # Right motor handle
             if ml and mr:                                                # If motors are present
-                safe_set_motor_velocities(ml, mr, lin_v - ang_v, lin_v + ang_v) 
+                SafeSetMotorVelocities(ml, mr, lin_v - ang_v, lin_v + ang_v) 
             return Status.RUNNING                                        # Keep roaming
         except Exception as e:
             main_logger.Error(f"FreeRoam crashed: {e}")   # Log crash
@@ -720,14 +752,14 @@ class ContinuousFreeRoam(BehaviorNode):
             mr = GetFromBlackboard("motorR")                            # Right motor
             if not all([compass, lidar]):                               # If critical sensors missing
                 if ml and mr:
-                    safe_set_motor_velocities(ml, mr, 0.5, 0.5)        
+                    SafeSetMotorVelocities(ml, mr, 0.5, 0.5)        
                 return Status.RUNNING
             heading = float(np.arctan2(compass.getValues()[0], compass.getValues()[1]))  
             ranges = np.array(lidar.getRangeImage())                    # Raw range image
             vr = ranges[np.isfinite(ranges)]                            # Keep only finite returns
             if len(vr) == 0:                                            # No usable ranges
                 if ml and mr:
-                    safe_set_motor_velocities(ml, mr, 0.5, 0.5)        
+                    SafeSetMotorVelocities(ml, mr, 0.5, 0.5)        
                 return Status.RUNNING
             if np.min(vr) < 0.5:                                        # Obstacle detected within 0.5 m
                 ang_v, lin_v = (2.0 if np.random.random() > 0.5 else -2.0), 0.2  # Turn in place-ish
@@ -735,14 +767,14 @@ class ContinuousFreeRoam(BehaviorNode):
                 err = (self.current_direction - heading + np.pi) % (2 * np.pi) - np.pi  # Heading error
                 ang_v, lin_v = err * 1.0, 1.0                           # Proportional steering and forward speed
             if ml and mr:                                               # Command motors
-                safe_set_motor_velocities(ml, mr, lin_v - ang_v, lin_v + ang_v)
+                SafeSetMotorVelocities(ml, mr, lin_v - ang_v, lin_v + ang_v)
             return Status.RUNNING
         except Exception as e:
             main_logger.Error(f"FreeRoam: crashed: {e}")                # Log failure
             ml = GetFromBlackboard("motorL")                            # Attempt to stop
             mr = GetFromBlackboard("motorR")
             if ml and mr:
-                stop_motors(ml, mr)
+                StopMotors(ml, mr)
             return Status.RUNNING                                       # Keep node alive
 
 class SetTwoGoals(BehaviorNode):
@@ -755,11 +787,10 @@ class SetTwoGoals(BehaviorNode):
     def execute(self):
         if self.goals:                                                   # If caller supplied goals
             blackboard.SetNavigationGoals(self.goals)                    # Publish directly
-            main_logger.Info(f"Goals: set {len(self.goals)} provided targets.")
             return Status.SUCCESS                                        # Done
         cspace = GetFromBlackboard("cspace")                             # Need map to pick safe goals
         if cspace is None:
-            main_logger.Error("c-space not available yet.")
+            main_logger.Error("SetTwoGoals: c-space not available yet.")
             return Status.FAILURE
         gps = GetFromBlackboard("gps")                                   # Use current position if available
         curr = gps.getValues()[:2] if gps else None                   
@@ -782,7 +813,7 @@ class SetTwoGoals(BehaviorNode):
         pp = PlanningParams()                                            
         pp.W2G = GetFromBlackboard("world_to_grid")                      # Inject transforms
         pp.G2W = GetFromBlackboard("grid_to_world")
-        safe_goals = FindSafePositions(                                  # Ask for N safe positions
+        safe_goals = find_safe_positions(                                  # Ask for N safe positions
             cspace,
             pp,
             num_positions=self.num_goals,
@@ -810,8 +841,8 @@ class ValidateAndVisualizeWaypoints(BehaviorNode):
             return Status.RUNNING
         for name, path in [("INNER_12", INNER_12), ("OUTER_PERIM", OUTER_PERIM)]:  # Known waypoint sets
             try:
-                if ValidatePath(path, cspace):                          # If path is valid through c-space
-                    VisualizePathOnMap(cspace, path, save_path=f"{name}_viz.npy")  # Save viz overlay for display
+                if validate_path(path, cspace):                          # If path is valid through c-space
+                    visualize_path_on_map(cspace, path, save_path=f"{name}_viz.npy")  # Save viz overlay for display
             except Exception:
                 pass                                                     # Ignore any visualization errors
         self.done = True                                                 # Mark as finished
@@ -839,7 +870,7 @@ class BidirectionalSurveyNavigator(BehaviorNode):
         lidar_ranges = np.array(lidar.getRangeImage()) if lidar else np.array([])  # LiDAR safety
         if lidar_ranges.size and np.isfinite(lidar_ranges).any():
             if np.min(lidar_ranges[np.isfinite(lidar_ranges)]) < 0.5:    # Too close to obstacle
-                safe_set_motor_velocities(ml, mr, 0, 0)                  # Stop immediately
+                SafeSetMotorVelocities(ml, mr, 0, 0)                  # Stop immediately
                 return False                                             # Not safe to rotate yet
         if self.rotation_target is None:                                 # Initialize rotation goal
             vx, vy = compass.getValues()[:2]
@@ -848,9 +879,9 @@ class BidirectionalSurveyNavigator(BehaviorNode):
         heading = np.arctan2(vx, vy)
         err = NormalizeAngle(self.rotation_target - heading)             # Smallest signed error
         w = float(np.clip(GAIN * err, -MAX_W, MAX_W))                
-        safe_set_motor_velocities(ml, mr, -w, w)                         # Spin in place
+        SafeSetMotorVelocities(ml, mr, -w, w)                         # Spin in place
         if abs(err) < np.radians(10):                             
-            safe_set_motor_velocities(ml, mr, 0, 0)                      # Stop
+            SafeSetMotorVelocities(ml, mr, 0, 0)                      # Stop
             self.rotation_target = None                                  # Clear for next time
             return True                                                  # Rotation complete
         return False                                                     # Continue rotating
@@ -906,7 +937,6 @@ class BidirectionalSurveyNavigator(BehaviorNode):
         if self.navigation_controller:                                   # Stop controller on BT shutdown
             self.navigation_controller.terminate()
 
-
 class RunInBackground(BehaviorNode):
     def __init__(self, child):
         super().__init__("RunInBackground")                            
@@ -918,7 +948,6 @@ class RunInBackground(BehaviorNode):
         child_status = self.child.tick()                                # Tick child without blocking
         return Status.RUNNING if child_status in (Status.SUCCESS, Status.RUNNING) else Status.FAILURE  # Only fail if child failed
 
-
 class EnableCspaceDisplay(BehaviorNode):
     def __init__(self):
         super().__init__("EnableCspaceDisplay")                          # Name the node
@@ -928,7 +957,6 @@ class EnableCspaceDisplay(BehaviorNode):
         blackboard.Set("survey_complete", True)                          # Mark survey as complete
         return Status.SUCCESS                                           
 
-
 class OnlyOnce(BehaviorNode):
     def __init__(self, child, key_suffix=None):
         super().__init__(f"OnlyOnce({child.name})")                      # Include child name for clarity
@@ -937,7 +965,7 @@ class OnlyOnce(BehaviorNode):
 
     def execute(self):
         if GetFromBlackboard(self.flag_key, False):                      # Already executed once?
-            return Status.FAILURE                                        # Do not run again
+            return Status.SUCCESS                                        # Return SUCCESS to keep selector on this branch
         res = self.child.tick()                                          # Otherwise, tick child
         if res in (Status.SUCCESS, Status.FAILURE):                      # When child finishes
             blackboard.Set(self.flag_key, True)                          # Set the flag
@@ -950,3 +978,123 @@ class OnlyOnce(BehaviorNode):
             self.child.reset()                                           # Reset child if supported
 
 
+###############################################################################
+# ================================== Main =====================================
+###############################################################################
+if __name__ == "__main__":
+    robot, timestep, gps, compass, lidar, motor_left, motor_right, display = InitAllDevices()  # Init devices
+
+    for k, v in [
+        ("stop_mapping", False),                       # Stop mapping loop
+        ("emergency_stop", False),                    # Global emergency stop
+        ("max_mapping_steps", 5000),                  # Cap mapping iterations
+        ("map_ready", False),                         # Map built and usable?
+        ("map_saved", False),                         # Map saved to disk?
+        ("trajectory_points", []),                    # Points for UI trail
+        ("display_mode", "full"),                     # UI mode: full/cspace/planning
+        ("allow_cspace_display", False),              # Allow c-space view
+        ("cspace_frozen", False),                     # Freeze c-space edits
+        ("survey_complete", False),                   # Survey done?
+    ]:
+        blackboard.Set(k, v)                           # Seed defaults
+
+    SetLogLevel(LogLevel.INFO)                         # Set log level
+
+    start = gps.getValues()                            # Initial pose
+    start_xy = (start[0], start[1])                    # (x, y) only
+    blackboard.Set(BBKey.START_XY, start_xy)           # Store start
+
+    cspace = GetFromBlackboard("cspace")              # Preexisting map?
+
+    INNER_12 = OrderFromStart(BuildEllipsePoints(), start_xy, close_loop=True)      # Inner loop waypoints
+    OUTER_PERIM = OrderFromStart(BuildPerimeterLoop(), start_xy, close_loop=True)   # Outer loop waypoints
+
+    if cspace is not None:                            # Clamp to safe bounds
+        INNER_12 = [ClampGoal(x, y, cspace) for x, y in INNER_12]
+        OUTER_PERIM = [ClampGoal(x, y, cspace) for x, y in OUTER_PERIM]
+
+    WAYPOINTS_SURVEY_INNER = INNER_12[:-1]            # Drop duplicate last point
+    WAYPOINTS_SURVEY_OUTER = OUTER_PERIM[:-1]         # Kept for parity
+
+    mapping_params = MappingParams(world_to_grid=WorldToGrid, grid_to_world=GridToWorld)  # Map params
+    planning_params = PlanningParams()                # Planner params
+
+    check_map = MapExistsOrReady()                    # Node: map exists?
+    load_map = LoadMap()                              # Node: load map
+    validate_loaded_map = ValidateLoadedMap()         # Node: sanity check
+    lidar_mapping = LidarMappingBT(mapping_params, bb=blackboard)     # Node: build/refresh c-space
+
+    bidir_survey = BidirectionalSurveyNavigator(WAYPOINTS_SURVEY_INNER)  # Node: forward+reverse survey
+    navigate_to_waypoints = NavigateToWaypoints()      # Node: follow planned path
+
+    set_two_safe_goals = SetTwoGoals(goals=None, num_goals=2)        # Node: pick two safe goals
+
+    plan_then_go = Sequence("PlanThenGo", [                          # Sequence: set goals -> plan -> go
+        set_two_safe_goals,
+        MultiGoalPlannerBT(planning_params, bb=blackboard),
+        navigate_to_waypoints,
+    ])
+
+    mapping_background = RunInBackground(lidar_mapping)               # Decorator: map in background
+
+    mapping_and_survey_parallel = Parallel(                           # Parallel: survey + mapping
+        "SurveyWithBackgroundMapping",
+        [bidir_survey, mapping_background],
+        success_threshold=1,                                          # Succeed if any child succeeds
+        failure_threshold=None,                                       # Don't fail based on a single child
+    )
+
+    complete_mapping_sequence = Sequence("CompleteMappingSequence", [ # Full flow when no saved map
+        mapping_and_survey_parallel,                                  # 1) Survey while mapping
+        EnsureCspaceNow(blackboard_instance=blackboard),              # 2) Ensure c-space exists
+        WaitForMapReady(),                                            # 3) Wait for map
+        SaveMap(),                                                    # 4) Save map to disk
+        validate_loaded_map,                                          # 5) Validate map
+        ValidateAndVisualizeWaypoints(),                              # 6) Save viz overlays
+        EnableCspaceDisplay(),                                        # 7) Allow c-space UI
+        SetDisplayMode("cspace"),                                     # 8) Switch UI
+        plan_then_go,                                                 # 9) Plan+go to goals
+    ])
+
+    use_existing_map_inner = Sequence("UseExistingMap", [             # Fast path if map exists
+        check_map,
+        load_map,
+        validate_loaded_map,
+        EnableCspaceDisplay(),
+        SetDisplayMode("cspace"),
+        plan_then_go,
+    ])
+
+    use_existing_map = OnlyOnce(use_existing_map_inner, "existing_map")  # Run fast path at most once
+
+    main_mission_tree = Selector("MainMissionTree", [use_existing_map, complete_mapping_sequence])  # Choose path
+
+    display_updater = DisplayUpdater()                                # Node: update UI regularly
+
+    main_execution_tree = Parallel("MainWithDisplay", [main_mission_tree, display_updater], 
+                                   success_threshold=2, failure_threshold=2)  # Mission + UI - never finishes
+
+    last_state = None                                                 # Track state changes
+    last_log_time = 0                                                 # Track last periodic log time
+
+    try:
+        while robot.step(timestep) != -1:                             # Main control loop
+            state = main_execution_tree.tick()                        # Step behavior tree
+            t = robot.getTime()
+            
+            # Log only on state changes and failures
+            if state != last_state:                                   # Log on change
+                if state == Status.FAILURE:                           # Mission failed
+                    main_logger.Error(f"Mission failed at t={t:.1f}s.")
+                    main_execution_tree.terminate()
+                    break
+                elif state == Status.SUCCESS:                         # Mission succeeded
+                    main_logger.Info(f"Mission completed at t={t:.1f}s.")
+                # Don't log RUNNING status changes to reduce spam
+                last_state = state
+    except KeyboardInterrupt:
+        pass                                                          # Allow Ctrl+C to exit
+    except Exception as e:
+        main_logger.Error(f"Unhandled exception in main loop: {e}")   # Catch-all log
+    finally:
+        main_execution_tree.terminate()                               # Stop controllers cleanly

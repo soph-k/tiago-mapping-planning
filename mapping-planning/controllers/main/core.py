@@ -228,33 +228,40 @@ def SetLogLevel(level: int | str, module: Optional[str] = None) -> None:
 
 
 ################################################################################
+# Assumes needed imports/types exist elsewhere:
+# from enum import Enum
+# from typing import Any, Dict, Optional, List
+# import time, traceback
+# main_logger, MapArray, PathType, Position2D are assumed to be defined.
+
+################################################################################
 # ================================ Blackboard keys =============================
 ################################################################################
-class BBKey(str, Enum):
-    ROBOT = "robot"
-    GPS = "gps"
-    COMPASS = "compass"
-    LIDAR = "lidar"
-    MOTOR_L = "motorL"
-    MOTOR_R = "motorR"
-    DISPLAY = "display"
-    TIMESTEP = "timestep"
-    INIT_Z = "init_z"
-    PROB_MAP = "prob_map"
-    CSPACE = "cspace"
-    START_XY = "start_xy"
-    PLANNED_PATH = "planned_path"
-    NAVIGATION_GOALS = "navigation_goals"
-    NAVIGATION_GOAL = "navigation_goal"
-    TRAJECTORY_POINTS = "trajectory_points"
-    STOP_MAPPING = "stop_mapping"
-    EMERGENCY_STOP = "emergency_stop"
-    MAX_MAPPING_STEPS = "max_mapping_steps"
-    MAP_SAVED = "map_saved"
-    MAP_READY = "map_ready"
-    CSPACE_FROZEN = "cspace_frozen"
-    DISPLAY_MODE = "display_mode"
-    ALLOW_CSPACE_DISPLAY = "allow_cspace_display"
+class BBKey(str, Enum):                              # Enum of string keys used to access data on the blackboard
+    ROBOT = "robot"                                  # Robot controller / handle
+    GPS = "gps"                                      # GPS sensor
+    COMPASS = "compass"                              # Compass sensor
+    LIDAR = "lidar"                                  # Lidar sensor
+    MOTOR_L = "motorL"                               # Left motor handle
+    MOTOR_R = "motorR"                               # Right motor handle
+    DISPLAY = "display"                              # Display device / UI
+    TIMESTEP = "timestep"                            # Simulation or control timestep
+    INIT_Z = "init_z"                                # Initial Z height/offset
+    PROB_MAP = "prob_map"                            # Probability map (e.g., occupancy grid)
+    CSPACE = "cspace"                                # Configuration space grid
+    START_XY = "start_xy"                            # Start position (x, y)
+    PLANNED_PATH = "planned_path"                    # Planned path data structure
+    NAVIGATION_GOALS = "navigation_goals"            # List of navigation goal points
+    NAVIGATION_GOAL = "navigation_goal"              # Current navigation goal
+    TRAJECTORY_POINTS = "trajectory_points"          # Executed/desired trajectory points
+    STOP_MAPPING = "stop_mapping"                    # Flag to stop mapping process
+    EMERGENCY_STOP = "emergency_stop"                # Emergency stop flag
+    MAX_MAPPING_STEPS = "max_mapping_steps"          # Cap on mapping iterations
+    MAP_SAVED = "map_saved"                          # Flag indicating map persisted
+    MAP_READY = "map_ready"                          # Flag indicating map is ready/complete
+    CSPACE_FROZEN = "cspace_frozen"                  # Flag indicating cspace should not update
+    DISPLAY_MODE = "display_mode"                    # UI display mode
+    ALLOW_CSPACE_DISPLAY = "allow_cspace_display"    # Permission to show cspace overlay
 
 
 ################################################################################
@@ -262,156 +269,153 @@ class BBKey(str, Enum):
 ################################################################################
 class Blackboard:
     def __init__(self):
-        self.data: Dict[str, Any] = {}
+        self.data: Dict[str, Any] = {}                # Internal storage dictionary for all key/value pairs
 
     @staticmethod
     def Key(key: BBKey | str) -> str:
-        return key.value if isinstance(key, BBKey) else key
+        return key.value if isinstance(key, BBKey) else key   # Normalize enums to their string values
 
     def Set(self, key: BBKey | str, value: Any) -> None:
-        self.data[self.Key(key)] = value
+        self.data[self.Key(key)] = value              # Set/overwrite a value for a key
 
     def Get(self, key: BBKey | str, default: Any = None) -> Any:
-        return self.data.get(self.Key(key), default)
+        return self.data.get(self.Key(key), default)  # Get value for key with optional default
 
     def Has(self, key: BBKey | str) -> bool:
-        return self.Key(key) in self.data
+        return self.Key(key) in self.data              # True if key exists
 
     def Incr(self, key: BBKey | str, by: int = 1) -> int:
-        key_str = self.Key(key)
-        new_value = (self.Get(key_str, 0) or 0) + by
-        self.Set(key_str, new_value)
-        return new_value
+        key_str = self.Key(key)                       # Normalize key
+        new_value = (self.Get(key_str, 0) or 0) + by  # Increment current value 
+        self.Set(key_str, new_value)                  # Store incremented value
+        return new_value                              # Return updated value
 
     def Remove(self, key: BBKey | str) -> None:
-        self.data.pop(self.Key(key), None)
+        self.data.pop(self.Key(key), None)            # Remove key if present; ignore if missing
 
     def Clear(self) -> None:
-        self.data.clear()
+        self.data.clear()                             # Remove all keys/values
 
     def AllowCspaceDisplay(self, value: bool | None = None) -> bool:
-        """Get/set whether c-space display is allowed."""
-        if value is not None:
+        if value is not None:                         # If a value is provided, set the flag
             self.Set(BBKey.ALLOW_CSPACE_DISPLAY, bool(value))
-        return bool(self.Get(BBKey.ALLOW_CSPACE_DISPLAY, False))
+        return bool(self.Get(BBKey.ALLOW_CSPACE_DISPLAY, False))  # Return current flag
 
     def ClearMissionData(self) -> None:
-        """Reset mission-related entries to known defaults."""
         for k in (BBKey.PLANNED_PATH, BBKey.NAVIGATION_GOALS, BBKey.NAVIGATION_GOAL):
-            self.Set(k, None)
-        self.Set(BBKey.TRAJECTORY_POINTS, [])
+            self.Set(k, None)                         # Clear mission related pointers
+        self.Set(BBKey.TRAJECTORY_POINTS, [])         # Reset trajectory to empty list
         for k, v in [
             ("stop_mapping", False),
             ("allow_cspace_display", False),
             ("map_saved", False),
             ("display_mode", "full"),
         ]:
-            self.Set(k, v)
+            self.Set(k, v)                            # Reset several  flags and display mode
 
-    def GetRobot(self): return self.Get(BBKey.ROBOT)
-    def GetGps(self): return self.Get(BBKey.GPS)
-    def GetCompass(self): return self.Get(BBKey.COMPASS)
-    def GetLidar(self): return self.Get(BBKey.LIDAR)
-    def GetMotors(self): return self.Get(BBKey.MOTOR_L), self.Get(BBKey.MOTOR_R)
-    def GetDisplay(self): return self.Get(BBKey.DISPLAY)
-    def GetProbMap(self) -> Optional(MapArray): return self.Get(BBKey.PROB_MAP)
-    def GetCspace(self) -> Optional(MapArray): return self.Get(BBKey.CSPACE)
-    def GetPlannedPath(self) -> Optional(PathType): return self.Get(BBKey.PLANNED_PATH)
-    def GetTrajectory(self) -> Optional(PathType): return self.Get(BBKey.TRAJECTORY_POINTS)
-    def GetNavigationGoals(self) -> Optional[List[Position2D]]: return self.Get(BBKey.NAVIGATION_GOALS)
+    def GetRobot(self): return self.Get(BBKey.ROBOT)  # Convenience getter for robot
+    def GetGps(self): return self.Get(BBKey.GPS)      # Get for GPS
+    def GetCompass(self): return self.Get(BBKey.COMPASS) # Get for compass
+    def GetLidar(self): return self.Get(BBKey.LIDAR)  # Get for lidar
+    def GetMotors(self): return self.Get(BBKey.MOTOR_L), self.Get(BBKey.MOTOR_R)  # Get for L/R motors
+    def GetDisplay(self): return self.Get(BBKey.DISPLAY)  # Get for display
+    def GetProbMap(self) -> Optional(MapArray): return self.Get(BBKey.PROB_MAP) # Get for probability map
+    def GetCspace(self) -> Optional(MapArray): return self.Get(BBKey.CSPACE)    # Get for cspace
+    def GetPlannedPath(self) -> Optional(PathType): return self.Get(BBKey.PLANNED_PATH)  # Get for planned path
+    def GetTrajectory(self) -> Optional(PathType): return self.Get(BBKey.TRAJECTORY_POINTS)  # Get for trajectory
+    def GetNavigationGoals(self) -> Optional[List[Position2D]]: return self.Get(BBKey.NAVIGATION_GOALS)  # Get for goals
 
     def SetProbMap(self, probability_map: MapArray):
-        self.Set(BBKey.PROB_MAP, probability_map)
+        self.Set(BBKey.PROB_MAP, probability_map)       # Set for prob map
 
     def SetCspace(self, configuration_space: MapArray):
-        self.Set(BBKey.CSPACE, configuration_space)
+        self.Set(BBKey.CSPACE, configuration_space)     # Setter for cspace
 
     def SetPlannedPath(self, path: PathType):
-        self.Set(BBKey.PLANNED_PATH, path)
+        self.Set(BBKey.PLANNED_PATH, path)              # Set for planned path
 
     def SetTrajectory(self, trajectory: PathType):
-        self.Set(BBKey.TRAJECTORY_POINTS, trajectory)
+        self.Set(BBKey.TRAJECTORY_POINTS, trajectory)   # Set for trajectory points
 
     def SetNavigationGoals(self, goals: List[Position2D]):
-        self.Set(BBKey.NAVIGATION_GOALS, goals)
+        self.Set(BBKey.NAVIGATION_GOALS, goals)         # Set for navigation goals
 
     def SetMapReady(self, ready: bool = True):
-        self.Set(BBKey.MAP_READY, ready)
+        self.Set(BBKey.MAP_READY, ready)                # Mark map readiness state
 
     def SetMapSaved(self, saved: bool = True):
-        self.Set(BBKey.MAP_SAVED, saved)
+        self.Set(BBKey.MAP_SAVED, saved)                # Mark map saved state
 
-blackboard = Blackboard()
+blackboard = Blackboard()                               # Global blackboard instance
 
 def CreateBlackboard() -> Blackboard:
-    return Blackboard()
+    return Blackboard()                                 # Factory for a fresh blackboard
 
 def SetGlobalBlackboard(new_blackboard: Blackboard) -> None:
-    """Swap out the global blackboard instance."""
-    global blackboard
-    blackboard = new_blackboard
+    global blackboard                                   # Use module level global
+    blackboard = new_blackboard                         # Replace global blackboard reference
 
 
 ################################################################################
 # ================================== BT core ===================================
 ################################################################################
-class Status(Enum):
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-    RUNNING = "RUNNING"
-    PAUSED = "PAUSED"
+class Status(Enum):                                   # Execution states for behavior tree nodes
+    SUCCESS = "SUCCESS"                               # Completed successfully
+    FAILURE = "FAILURE"                               # Completed unsuccessfully
+    RUNNING = "RUNNING"                               # Still in progress
+    PAUSED = "PAUSED"                                 # Temporarily paused
 
 class BehaviorNode:
     def __init__(self, name: str = "Behavior"):
-        self.name = name
-        self.status = Status.FAILURE
-        self.tick_count = 0
-        self.last_tick_time: Optional[float] = None
-        self.is_paused = False
-        self.is_halted = False
+        self.name = name                              
+        self.status = Status.FAILURE                  # Last status
+        self.tick_count = 0                           # Number of times tick was called
+        self.last_tick_time: Optional[float] = None   # Timestamp of last tick
+        self.is_paused = False                        # Pause flag
+        self.is_halted = False                        
 
     def execute(self) -> Status:
-        return Status.FAILURE
+        return Status.FAILURE                         
 
     def tick(self) -> Status:
-        if self.is_halted:
+        if self.is_halted:                            # If halted, report failure without executing
             return Status.FAILURE
-        if self.is_paused:
+        if self.is_paused:                            # If paused, report pause without executing
             return Status.PAUSED
-        self.tick_count += 1
-        self.last_tick_time = time.time()
+        self.tick_count += 1                          # Increment tick counter
+        self.last_tick_time = time.time()             # Record tick time
         try:
-            result = self.execute()
-            self.status = result if isinstance(result, Status) else Status.FAILURE
-        except Exception as error:
-            self.status = Status.FAILURE
-            main_logger.Error(f"{self.name} (#{self.tick_count}): {type(error).__name__} - {error}")
-            traceback.print_exc()
-        return self.status
+            result = self.execute()                   # Execute node specific logic
+            self.status = result if isinstance(result, Status) else Status.FAILURE  
+        except Exception as error:                    # Catch runtime exceptions
+            self.status = Status.FAILURE              # Mark failure on exception
+            main_logger.Error(f"{self.name} (#{self.tick_count}): {type(error).__name__} - {error}")  # Log error
+            traceback.print_exc()                     
+        return self.status                            # Return current status
 
     def reset(self) -> None:
-        self.status = Status.FAILURE
-        self.tick_count = 0
-        self.is_paused = False
+        self.status = Status.FAILURE                  # Reset status to default
+        self.tick_count = 0                           # Reset tick counter
+        self.is_paused = False                        # Clear pause state
 
     def terminate(self) -> None:
-        pass
+        pass                                          
 
     def pause(self) -> None:
-        self.is_paused = True
-        main_logger.Debug(f"Paused: {self.name}")
+        self.is_paused = True                         # Set pause flag
+        main_logger.Debug(f"Paused: {self.name}")     # Log pause
 
     def resume(self) -> None:
-        self.is_paused = False
-        main_logger.Debug(f"Resumed: {self.name}")
+        self.is_paused = False                        # Clear pause flag
+        main_logger.Debug(f"Resumed: {self.name}")    # Log resume
 
     def halt(self) -> None:
-        self.is_halted = True
-        self.is_paused = False
-        main_logger.Debug(f"Halted: {self.name}")
+        self.is_halted = True                         
+        self.is_paused = False                        # Ensure not paused simultaneously
+        main_logger.Debug(f"Halted: {self.name}")     
 
     def GetInfo(self) -> Dict[str, Any]:
-        return {
+        return {                                      
             "name": self.name,
             "status": self.status.value,
             "tick_count": self.tick_count,
@@ -426,56 +430,56 @@ class BehaviorNode:
 ################################################################################
 class _Composite(BehaviorNode):
     def __init__(self, name: str, children: Optional[List[BehaviorNode]] = None):
-        super().__init__(name)
-        self.children = list(children or [])
-        self.current_child = 0
+        super().__init__(name)                        # Initialize base node state
+        self.children = list(children or [])          # Store child nodes 
+        self.current_child = 0                        # Index of currently active child
 
     def reset(self) -> None:
-        super().reset()
-        self.current_child = 0
+        super().reset()                               # Reset own state
+        self.current_child = 0                        # Reset child pointer
         for child in self.children:
-            child.reset()
+            child.reset()                             # Reset all children
 
     def terminate(self) -> None:
         if 0 <= self.current_child < len(self.children):
-            self.children[self.current_child].terminate()
-        self.current_child = 0
+            self.children[self.current_child].terminate()  # Terminate active child if any
+        self.current_child = 0                        # Reset child pointer
 
 class Selector(_Composite):
     def execute(self) -> Status:
         if not self.children:
-            return Status.FAILURE
+            return Status.FAILURE                     # No children means failure
         for index in range(self.current_child, len(self.children)):
-            self.current_child = index
-            status = self.children[index].tick()
+            self.current_child = index                # Update current child index
+            status = self.children[index].tick()      # Tick child
             if status == Status.SUCCESS:
-                self.children[index].reset()
-                self.current_child = 0
-                return Status.SUCCESS
+                self.children[index].reset()          # Reset child on success
+                self.current_child = 0                # Prepare for next cycle
+                return Status.SUCCESS                 # Return success immediately
             if status in (Status.RUNNING, Status.PAUSED):
-                return status
+                return status                        
         if 0 <= self.current_child < len(self.children):
-            self.children[self.current_child].reset()
-        self.current_child = 0
-        return Status.FAILURE
+            self.children[self.current_child].reset() # Reset last attempted child
+        self.current_child = 0                        # Reset pointer
+        return Status.FAILURE                         # All children failed
 
 class Sequence(_Composite):
     def execute(self) -> Status:
         if not self.children:
-            return Status.FAILURE
+            return Status.FAILURE                     # No children means failure
         for index in range(self.current_child, len(self.children)):
-            self.current_child = index
-            status = self.children[index].tick()
+            self.current_child = index                # Update current child index
+            status = self.children[index].tick()      # Tick child
             if status == Status.FAILURE:
-                self.children[index].reset()
-                self.current_child = 0
-                return Status.FAILURE
+                self.children[index].reset()          # Reset failing child
+                self.current_child = 0                # Reset pointer
+                return Status.FAILURE                 # Early exit on failure
             if status in (Status.RUNNING, Status.PAUSED):
-                return status
+                return status                         
         if 0 <= self.current_child < len(self.children):
-            self.children[self.current_child].reset()
-        self.current_child = 0
-        return Status.SUCCESS
+            self.children[self.current_child].reset() # Reset last child after success
+        self.current_child = 0                        # Reset pointer
+        return Status.SUCCESS                         # All children succeeded
 
 class Parallel(BehaviorNode):
     def __init__(
@@ -485,76 +489,76 @@ class Parallel(BehaviorNode):
         success_threshold: int = 1,
         failure_threshold: Optional[int] = None,
     ):
-        super().__init__(name)
-        self.children = list(children or [])
-        self.success_threshold = success_threshold
-        self.failure_threshold = failure_threshold or len(self.children)
+        super().__init__(name)                        # Initialize base node
+        self.children = list(children or [])          # Store children
+        self.success_threshold = success_threshold    # Number of child successes to succeed overall
+        self.failure_threshold = failure_threshold or len(self.children)  # Fail after this many failures
 
     def execute(self) -> Status:
-        status_counts = {status: 0 for status in Status}
+        status_counts = {status: 0 for status in Status}  # Counters for each status
         for child in self.children:
             try:
-                child_status = child.tick()
-                status_counts[child_status] += 1
+                child_status = child.tick()           # Tick child node
+                status_counts[child_status] += 1      # Increment counter for returned status
             except Exception as error:
-                main_logger.Error(f"{self.name}: {error}")
-                status_counts[Status.FAILURE] += 1
+                main_logger.Error(f"{self.name}: {error}")  
+                status_counts[Status.FAILURE] += 1    # Count exception as failure
         if status_counts[Status.SUCCESS] >= self.success_threshold:
             for child in self.children:
-                child.reset()
-            self.terminate()
-            return Status.SUCCESS
+                child.reset()                         # Reset all children on success
+            self.terminate()                          # Terminate parallel node session
+            return Status.SUCCESS                     # Overall success
         if status_counts[Status.FAILURE] >= self.failure_threshold:
             for child in self.children:
-                child.reset()
-            self.terminate()
-            return Status.FAILURE
-        return Status.PAUSED if status_counts[Status.PAUSED] else Status.RUNNING
+                child.reset()                         # Reset all children on failure
+            self.terminate()                          # Terminate parallel node session
+            return Status.FAILURE                     # Overall failure
+        return Status.PAUSED if status_counts[Status.PAUSED] else Status.RUNNING  
 
     def reset(self) -> None:
-        super().reset()
+        super().reset()                               # Reset self
         for child in self.children:
-            child.reset()
+            child.reset()                             # Reset all children
 
     def terminate(self) -> None:
         for child in self.children:
-            child.terminate()
+            child.terminate()                         # Terminate all children
 
 ################################################################################
 # ================================ Rate limiters ===============================
 ################################################################################
 class TimeBasedRateLimiter:
     def __init__(self, interval_seconds: float = 5.0):
-        self.interval = interval_seconds
-        self.last_execution: Optional[float] = None
+        self.interval = interval_seconds              # Minimum seconds between allowed executions
+        self.last_execution: Optional[float] = None   # Timestamp of last allowed execution
 
     def ShouldExecute(self, current_time: Optional[float] = None) -> bool:
-        now = current_time if current_time is not None else time.time()
+        now = current_time if current_time is not None else time.time()  # Use provided time or current time
         if self.last_execution is None or (now - self.last_execution) >= self.interval:
-            self.last_execution = now
-            return True
-        return False
+            self.last_execution = now                 # Update last execution time
+            return True                               # Allowed to execute
+        return False                                  
 
     def Reset(self) -> None:
-        self.last_execution = None
+        self.last_execution = None                    # Clear execution history
 
 class CountBasedRateLimiter:
     def __init__(self, every_n_calls: int = 100):
-        self.interval = max(1, int(every_n_calls))
-        self.counter = 0
+        self.interval = max(1, int(every_n_calls))    # Execute every N invocations 
+        self.counter = 0                              # Internal call counter
 
     def ShouldExecute(self) -> bool:
-        self.counter += 1
-        if self.counter >= self.interval:
-            self.counter = 0
-            return True
-        return False
-    
+        self.counter += 1                             # Increment call count
+        if self.counter >= self.interval:             # If reached threshold
+            self.counter = 0                          # Reset counter
+            return True                               # Allow execution
+        return False                                  # Not yet
+
     def Reset(self) -> None:
-        self.counter = 0
+        self.counter = 0                              # Reset counter to zero
 
 def EveryNCalls(n: int = 100) -> CountBasedRateLimiter:
-    return CountBasedRateLimiter(n)
+    return CountBasedRateLimiter(n)                   # Helper to build a count based limiter
 
 def EveryNSeconds(seconds: float = 5.0) -> TimeBasedRateLimiter:
-    return TimeBasedRateLimiter(seconds)
+    return TimeBasedRateLimiter(seconds)              # Helper to build a time based limiter
