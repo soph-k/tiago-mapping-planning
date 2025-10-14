@@ -1,3 +1,6 @@
+###############################################################################
+# ------------------------- Imports  -----------------------------------------
+###############################################################################
 from __future__ import annotations                # Used in webots and older versions of python.
 import os                                         # For device stuff.
 import time                                       # Times stamps etc.

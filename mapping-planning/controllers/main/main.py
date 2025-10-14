@@ -1,3 +1,6 @@
+###############################################################################
+# ------------------------- Imports  -----------------------------------------
+###############################################################################
 from __future__ import annotations
 from controller import Supervisor
 import numpy as np
@@ -26,8 +29,13 @@ from core import (
     TH_FREE_PLANNER,
 )
 from navigation import ObstacleAvoidingNavigation, SafeSetMotorVelocities, StopMotors
+from mapping import LidarMappingBT
+from planning import validate_path, visualize_path_on_map, find_safe_positions, MultiGoalPlannerBT
 
 
+###############################################################################
+# ------------------------- Utilities -----------------------------------------
+###############################################################################
 def GetFromBlackboard(key, default=None):
     return blackboard.Get(key, default)
 
@@ -608,7 +616,6 @@ class NavigateToWaypoints(BehaviorNode):
             self.navigator.terminate()
             self.navigator = None
 
-
 class ValidateLoadedMap(BehaviorNode):
     def __init__(self):
         super().__init__("ValidateLoadedMap")                           # Name the node
@@ -985,65 +992,51 @@ if __name__ == "__main__":
     robot, timestep, gps, compass, lidar, motor_left, motor_right, display = InitAllDevices()  # Init devices
 
     for k, v in [
-        ("stop_mapping", False),                       # Stop mapping loop
-        ("emergency_stop", False),                    # Global emergency stop
-        ("max_mapping_steps", 5000),                  # Cap mapping iterations
-        ("map_ready", False),                         # Map built and usable?
-        ("map_saved", False),                         # Map saved to disk?
-        ("trajectory_points", []),                    # Points for UI trail
-        ("display_mode", "full"),                     # UI mode: full/cspace/planning
-        ("allow_cspace_display", False),              # Allow c-space view
-        ("cspace_frozen", False),                     # Freeze c-space edits
-        ("survey_complete", False),                   # Survey done?
+        ("stop_mapping", False),                                        # Stop mapping loop
+        ("emergency_stop", False),                                      # Global emergency stop
+        ("max_mapping_steps", 5000),                                    # Mapping iterations
+        ("map_ready", False),                                           # Map built and usable?
+        ("map_saved", False),                                           # Map saved to disk?
+        ("trajectory_points", []),                                      # Points for UI trail
+        ("display_mode", "full"),                                       # Full/cspace/planning
+        ("allow_cspace_display", False),                                # Allow c-space view
+        ("cspace_frozen", False),                                       # Freeze c-space edits
+        ("survey_complete", False),                                     # Survey done?
     ]:
-        blackboard.Set(k, v)                           # Seed defaults
-
-    SetLogLevel(LogLevel.INFO)                         # Set log level
-
-    start = gps.getValues()                            # Initial pose
-    start_xy = (start[0], start[1])                    # (x, y) only
-    blackboard.Set(BBKey.START_XY, start_xy)           # Store start
-
-    cspace = GetFromBlackboard("cspace")              # Preexisting map?
-
+        blackboard.Set(k, v)                                            # Seed defaults
+    SetLogLevel(LogLevel.INFO)                                          # Set log level
+    start = gps.getValues()                                             # Initial pose
+    start_xy = (start[0], start[1])                    
+    blackboard.Set(BBKey.START_XY, start_xy)                            # Store start
+    cspace = GetFromBlackboard("cspace")                                # Preexisting map?
     INNER_12 = OrderFromStart(BuildEllipsePoints(), start_xy, close_loop=True)      # Inner loop waypoints
     OUTER_PERIM = OrderFromStart(BuildPerimeterLoop(), start_xy, close_loop=True)   # Outer loop waypoints
-
-    if cspace is not None:                            # Clamp to safe bounds
+    if cspace is not None:                                              # Clamp to safe bounds
         INNER_12 = [ClampGoal(x, y, cspace) for x, y in INNER_12]
         OUTER_PERIM = [ClampGoal(x, y, cspace) for x, y in OUTER_PERIM]
-
-    WAYPOINTS_SURVEY_INNER = INNER_12[:-1]            # Drop duplicate last point
-    WAYPOINTS_SURVEY_OUTER = OUTER_PERIM[:-1]         # Kept for parity
-
+    WAYPOINTS_SURVEY_INNER = INNER_12[:-1]                              # Drop duplicate last point
+    WAYPOINTS_SURVEY_OUTER = OUTER_PERIM[:-1]                           # Kept for parity
     mapping_params = MappingParams(world_to_grid=WorldToGrid, grid_to_world=GridToWorld)  # Map params
-    planning_params = PlanningParams()                # Planner params
-
-    check_map = MapExistsOrReady()                    # Node: map exists?
-    load_map = LoadMap()                              # Node: load map
-    validate_loaded_map = ValidateLoadedMap()         # Node: sanity check
-    lidar_mapping = LidarMappingBT(mapping_params, bb=blackboard)     # Node: build/refresh c-space
-
-    bidir_survey = BidirectionalSurveyNavigator(WAYPOINTS_SURVEY_INNER)  # Node: forward+reverse survey
-    navigate_to_waypoints = NavigateToWaypoints()      # Node: follow planned path
-
-    set_two_safe_goals = SetTwoGoals(goals=None, num_goals=2)        # Node: pick two safe goals
-
-    plan_then_go = Sequence("PlanThenGo", [                          # Sequence: set goals -> plan -> go
+    planning_params = PlanningParams()                                  # Planner params
+    check_map = MapExistsOrReady()                              
+    load_map = LoadMap()                              
+    validate_loaded_map = ValidateLoadedMap()         
+    lidar_mapping = LidarMappingBT(mapping_params, bb=blackboard)       # Build/refresh c-space
+    bidir_survey = BidirectionalSurveyNavigator(WAYPOINTS_SURVEY_INNER)  
+    navigate_to_waypoints = NavigateToWaypoints()                       # Follow planned path
+    set_two_safe_goals = SetTwoGoals(goals=None, num_goals=2)          
+    plan_then_go = Sequence("PlanThenGo", [                          
         set_two_safe_goals,
         MultiGoalPlannerBT(planning_params, bb=blackboard),
         navigate_to_waypoints,
     ])
-
     mapping_background = RunInBackground(lidar_mapping)               # Decorator: map in background
-
     mapping_and_survey_parallel = Parallel(                           # Parallel: survey + mapping
         "SurveyWithBackgroundMapping",
         [bidir_survey, mapping_background],
         success_threshold=1,                                          # Succeed if any child succeeds
         failure_threshold=None,                                       # Don't fail based on a single child
     )
-
     complete_mapping_sequence = Sequence("CompleteMappingSequence", [ # Full flow when no saved map
         mapping_and_survey_parallel,                                  # 1) Survey while mapping
         EnsureCspaceNow(blackboard_instance=blackboard),              # 2) Ensure c-space exists
@@ -1055,7 +1048,6 @@ if __name__ == "__main__":
         SetDisplayMode("cspace"),                                     # 8) Switch UI
         plan_then_go,                                                 # 9) Plan+go to goals
     ])
-
     use_existing_map_inner = Sequence("UseExistingMap", [             # Fast path if map exists
         check_map,
         load_map,
@@ -1064,25 +1056,18 @@ if __name__ == "__main__":
         SetDisplayMode("cspace"),
         plan_then_go,
     ])
-
     use_existing_map = OnlyOnce(use_existing_map_inner, "existing_map")  # Run fast path at most once
-
     main_mission_tree = Selector("MainMissionTree", [use_existing_map, complete_mapping_sequence])  # Choose path
-
     display_updater = DisplayUpdater()                                # Node: update UI regularly
-
     main_execution_tree = Parallel("MainWithDisplay", [main_mission_tree, display_updater], 
                                    success_threshold=2, failure_threshold=2)  # Mission + UI - never finishes
 
     last_state = None                                                 # Track state changes
     last_log_time = 0                                                 # Track last periodic log time
-
     try:
         while robot.step(timestep) != -1:                             # Main control loop
             state = main_execution_tree.tick()                        # Step behavior tree
             t = robot.getTime()
-            
-            # Log only on state changes and failures
             if state != last_state:                                   # Log on change
                 if state == Status.FAILURE:                           # Mission failed
                     main_logger.Error(f"Mission failed at t={t:.1f}s.")
@@ -1090,11 +1075,10 @@ if __name__ == "__main__":
                     break
                 elif state == Status.SUCCESS:                         # Mission succeeded
                     main_logger.Info(f"Mission completed at t={t:.1f}s.")
-                # Don't log RUNNING status changes to reduce spam
                 last_state = state
     except KeyboardInterrupt:
         pass                                                          # Allow Ctrl+C to exit
     except Exception as e:
         main_logger.Error(f"Unhandled exception in main loop: {e}")   # Catch-all log
     finally:
-        main_execution_tree.terminate()                               # Stop controllers cleanly
+        main_execution_tree.terminate()                               # Stop controllers
