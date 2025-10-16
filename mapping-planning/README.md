@@ -6,7 +6,7 @@
 
 Build a LiDAR map, inflate to C-space, plan with A*, and navigate multiple goals via a simple behavior tree.
 
-![Simulation screenshot](./assets/images/screenshot.png)
+![Robot Demo](assets/images/demo.gif)
 
 ---
 
@@ -37,6 +37,8 @@ A Webots controller for a TIAGo-like robot that:
 - Webots  
 - Python 3.8+  
 - NumPy  
+- SciPy
+- PIL (for C-space image export)
 
 ---
 
@@ -52,13 +54,12 @@ A Webots controller for a TIAGo-like robot that:
 ```bash
 git clone https://github.com/soph-k/tiago-mapping-planning.git
 cd tiago-mapping-planning
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install numpy scipy
+pip install numpy scipy pillow
 ```
 
 ### Run (in Webots)
 
-1. Load your the world
+1. Load your world
 2. Set the controller to `main.py`
 3. Press Run
 
@@ -66,12 +67,14 @@ pip install numpy scipy
 
 ## Project Structure
 ```
- main.py         # Device init, BT, display
- core.py         # Params, transforms, logging, helpers
- mapping.py      # Occupancy → C-space
- planning.py     # A*, JPS, bidirectional, smoothing
- navigation.py   # Waypoint follower, obstacle checks, recovery
- assets/ | maps/
+main.py         # Device init, BT, display
+core.py         # Params, transforms, logging, helpers
+mapping.py      # Occupancy → C-space
+planning.py     # A*, JPS, bidirectional, smoothing
+navigation.py   # Waypoint follower, obstacle checks, recovery
+maps/           # Saved maps and C-space images
+assets/
+  +-- images/   # Screenshots and demo animation
 ```
 
 ---
@@ -94,8 +97,26 @@ pip install numpy scipy
 - **Logging**: `ROBOT_LOG_LEVEL = ERROR|WARNING|INFO|DEBUG|VERBOSE`
 
 ---
-## Behavior Tree Structure
 
+## Configuration Space (C-Space)
+
+The robot generates a configuration space that accounts for its physical dimensions and safety. This C-space is built from the probabilistic occupancy map using Euclidean distance transforms.
+
+![Configuration Space](assets/images//cspace.png)
+
+**C-Space Characteristics:**
+- **Black areas**: Navigable free space where the robot center can safely travel
+- **White areas**: No-go zones including inflated obstacles and walls
+- **Inflation parameters**: Robot radius (0.15m) + safety margin (0.05m) with configurable scale factor
+- **Uncertainty**: Regions with unknown probability treated as occupied
+- **Update**: Rebuilt every 0.5 seconds during mapping, frozen after forward loop completed
+
+
+The C-space generation uses an 18% additional safety buffer beyond the minimum required distance, creating a thinner but safe navigation space while preventing collisions.
+
+---
+
+## Behavior Tree Structure
 ```
 Root: MainWithDisplay (Parallel)
 |
@@ -126,8 +147,8 @@ Root: MainWithDisplay (Parallel)
 |       +-- EnsureCspaceNow
 |       +-- WaitForMapReady
 |       +-- SaveMap
+|       +-- SaveCspaceImage
 |       +-- ValidateLoadedMap
-|       +-- ValidateAndVisualizeWaypoints
 |       +-- EnableCspaceDisplay
 |       +-- SetDisplayMode(cspace)
 |       +-- PlanThenGo (Sequence)
@@ -149,9 +170,10 @@ Root: MainWithDisplay (Parallel)
 ### Execution Flow
 1. System attempts to load existing map
 2. If no map exists, performs complete mapping sequence
-3. Once map is ready, plans path to two safe goals
+3. Once map is ready, plans path to goals
 4. Navigates to goals while avoiding obstacles
 5. Display updates continuously throughout mission
+
 ---
 
 ## License
@@ -162,6 +184,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-Webots, Python, NumPy, py_trees, and coolsymbols.com.
+Webots, Python, NumPy, SciPy, PIL, and coolsymbols.com.
 
 Badges workflow adapted by Soph with help from Claude AI.

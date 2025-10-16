@@ -1,196 +1,192 @@
 ###############################################################################
 # ------------------------- Imports  -----------------------------------------
 ###############################################################################
-# Small group of imports for core features
-# Math arrays random and project tools
-from __future__ import annotations                    # Postpone evaluation of annotations
-import numpy as np                                    # Numerical utilities
-import random                                         # Random choices, etc.
+from __future__ import annotations                    
+import numpy as np                                                                # Numerical utilities
+import random                                                                     # Random choices, etc.
 from collections import deque
-from dataclasses import dataclass, field              # Dataclass helpers
-from core import BehaviorNode, Status, blackboard, nav_logger, NormalizeAngle, main_logger, UpdateTrajectory, Distance2D # Project imports
+from dataclasses import dataclass, field                                          # Dataclass helpers
+from core import BehaviorNode, Status, blackboard, GetFromBlackboard, nav_logger, NormalizeAngle, main_logger, UpdateTrajectory, Distance2D # Project imports
 
 
 ###############################################################################
 # ------------------------- Utilities -----------------------------------------
 ###############################################################################
-# Simple helpers for shared data and math
-# Works with angles lidar and arrays
-def GetFromBlackboard(key, default=None):                               # Fetch a value from a global blackboard store
-    return blackboard.Get(key, default)
+# Angle math and lidar helpers used by navigation.
+# Handles NaN/Inf and returns fallbacks.
 def AngDiff(a: float, b: float) -> float:
-    return NormalizeAngle(a - b)                     # Normalized angular difference 
+    return NormalizeAngle(a - b)                                                  # Normalized angular difference 
 
 def FindMinimumFiniteValue(a):
-    a = np.asarray(a)                                # Ensure numpy array
-    f = a[np.isfinite(a)]                            # Filter out infinite
+    a = np.asarray(a)                                                             # Ensure numpy array
+    f = a[np.isfinite(a)]                                                         # Filter out infinite
     if f.size:
-        return float(np.min(f))                      # Min of finite values
-    return 10.0                                      # Fallback large distance if none finite
+        return float(np.min(f))                                                   # Min of finite values
+    return 10.0                                                                   # Fallback large distance if none finite
 
 def ScanLidarSectors(ranges):
-    n = len(ranges)                                  # Number of rays
-    t = n // 3                                       # Third of array length
-    left = FindMinimumFiniteValue(ranges[:t])        # Left sector min
-    front = FindMinimumFiniteValue(ranges[t:2 * t])  # Front sector min
-    right = FindMinimumFiniteValue(ranges[2 * t:])   # Right sector min
-    m = FindMinimumFiniteValue(ranges)               # Global min
+    n = len(ranges)                                                               # Number of rays
+    t = n // 3                                                                    # Third of array length
+    left = FindMinimumFiniteValue(ranges[:t])                                     # Left sector min
+    front = FindMinimumFiniteValue(ranges[t:2 * t])                               # Front sector min
+    right = FindMinimumFiniteValue(ranges[2 * t:])                                # Right sector min
+    m = FindMinimumFiniteValue(ranges)                                            # Global min
     return left, front, right, min(left, front, right, m)
 
 
 ###############################################################################
 # ------------------------- Device helpers ------------------------------------
 ###############################################################################
-# Wrappers for motor and device access
-# Adds safety checks and limits
+# Lightweight wrappers around Webots devices.
+# Clamp wheel speeds, warn on missing devices, and provide a safe stop.
 def GetRobotDevicesFromBlackboard(bb, *keys):
-    devs = [bb.Get(k) for k in keys]                 # Fetch devices by key
-    miss = []                                        # Track missing ones
+    devs = [bb.Get(k) for k in keys]                                              # Fetch devices by key
+    miss = []                                                                     # Track missing ones
     for k, d in zip(keys, devs):
         if d is None:
-            miss.append(k)                           # Collect missing key names
+            miss.append(k)                                                        # Collect missing key names
     if miss:
-        nav_logger.Warning(f"Missing devices: {miss}")  # Warn if any missing
-    return devs                                      # Return
+        nav_logger.Warning(f"Missing devices: {miss}")                            # Warn if any missing
+    return devs                                                                   # Return
 
 def ClipMotorVelocity(motor, v, name):
     if motor is None:
-        nav_logger.Error(f"{name}: Motor device is None")  # Error if motor missing
+        nav_logger.Error(f"{name}: Motor device is None")                         # Error if motor missing
         return 0.0
     vmax = motor.getMaxVelocity()
     return float(np.clip(v, -vmax, vmax))
 
 def SafeSetMotorVelocities(L, R, lv, rv):
     if not (L and R):
-        nav_logger.Error("Motor devices are None")  # Guard against None
+        nav_logger.Error("Motor devices are None")                                # Guard against None
         return False
-    L.setVelocity(ClipMotorVelocity(L, lv, "MotorL"))  # Set safe left wheel vel
-    R.setVelocity(ClipMotorVelocity(R, rv, "MotorR"))  # Set safe right wheel vel
+    L.setVelocity(ClipMotorVelocity(L, lv, "MotorL"))                             # Set safe left wheel vel
+    R.setVelocity(ClipMotorVelocity(R, rv, "MotorR"))                             # Set safe right wheel vel
     return True
 
 def StopMotors(L, R):
-    SafeSetMotorVelocities(L, R, 0.0, 0.0)           # Command zero velocity to both motors
+    SafeSetMotorVelocities(L, R, 0.0, 0.0)                                        # Command zero velocity to both motors
 
 
 ###############################################################################
 # ------------------------- Stuck detection state -----------------------------
 ################################################################################
-# Tracks when the robot is stuck
-# Manages detours timers and history
+# Tracks heading history and detour attempts to detect or escape being stuck.
+# Provides quick reset helpers for detour state and cooldown timers.
 @dataclass
 class StuckDetourState:
-    stuck_threshold: int = 10                        # Counts before declaring stuck
-    max_detour_attempts: int = 3                     # Max number of detours to insert
-    detour_count: int = 0                            # How many detours used so far
-    stuck_events: int = 0                            # Number of consecutive stuck detections
-    stuck_cooldown_until: float = 0.0                # Time until next stuck check allowed
-    last_detour_time: float = -1.0                   # Last time a detour was inserted
-    detour_active: bool = False                      # Whether currently executing a detour
-    detour_start_time: float | None = None           # Start time of active detour
-    heading_hist: deque = field(default_factory=lambda: deque(maxlen=32))      # Recent headings
-    heading_hist_t: deque = field(default_factory=lambda: deque(maxlen=32))    # Timestamps for headings
+    stuck_threshold: int = 10                                                     # Counts before declaring stuck
+    max_detour_attempts: int = 3                                                  # Max number of detours to insert
+    detour_count: int = 0                                                         # How many detours used so far
+    stuck_events: int = 0                                                         # Number of consecutive stuck detections
+    stuck_cooldown_until: float = 0.0                                             # Time until next stuck check allowed
+    last_detour_time: float = -1.0                                                # Last time a detour was inserted
+    detour_active: bool = False                                                   # Whether currently executing a detour
+    detour_start_time: float | None = None                                        # Start time of active detour
+    heading_hist: deque = field(default_factory=lambda: deque(maxlen=32))         # Recent headings
+    heading_hist_t: deque = field(default_factory=lambda: deque(maxlen=32))       # Timestamps for headings
 
     def reset_detours(self):
-        self.detour_count = 0                        # Reset detour count
-        self.last_detour_time = -1.0                 # Clear last detour time
-        self.detour_active = False                   # Mark no active detour
-        self.detour_start_time = None                # Clear detour start time
-        self.stuck_events = 0                        # Reset stuck event streak
+        self.detour_count = 0                                                     # Reset detour count
+        self.last_detour_time = -1.0                                              # Clear last detour time
+        self.detour_active = False                                                # Mark no active detour
+        self.detour_start_time = None                                             # Clear detour start time
+        self.stuck_events = 0                                                     # Reset stuck event streak
 
     def reset_all(self):
-        self.reset_detours()                         # Reset detour
-        self.stuck_cooldown_until = 0.0              # Remove cooldown
-        self.heading_hist.clear()                    # Clear heading history
-        self.heading_hist_t.clear()                  # Clear heading timestamps
+        self.reset_detours()                                                      # Reset detour
+        self.stuck_cooldown_until = 0.0                                           # Remove cooldown
+        self.heading_hist.clear()                                                 # Clear heading history
+        self.heading_hist_t.clear()                                               # Clear heading timestamps
 
 
 ###############################################################################
 # ------------------------- Navigation base -----------------------------------
 ###############################################################################
-# Core waypoint follower logic
-# Handles timing state and progress
+# Base class for waypoint navigation and common helpers.
+# Manages device access, pose, timers, stuck state, and cleanup.
 class NavigationBase(BehaviorNode):
     def __init__(self, name, waypoints=None, maxSpeed=5.0, wheel_radius=None, distance_2wheels=None,
                  p1=0.7, p2=0.3, tolerance=0.30, traversal="once", start_direction=+1, bb=None):
-        super().__init__(name)                       # Init BehaviorNode
-        self.bb = bb or blackboard                   # Use provided or global blackboard
-        self.waypoints = waypoints or []             # List of x and y targets
-        self.dir = 1 if start_direction >= 0 else -1 # Direction of traversal
+        super().__init__(name)                                                    # Init BehaviorNode
+        self.bb = bb or blackboard                                                # Use provided or global blackboard
+        self.waypoints = waypoints or []                                          # List of x and y targets
+        self.dir = 1 if start_direction >= 0 else -1                              # Direction of traversal
         if self.dir > 0:
-            self.index = 0                           # Start at first waypoint
+            self.index = 0                                                        # Start at first waypoint
         else:
-            self.index = max(0, len(self.waypoints) - 1)  # Start at last if reverse
-        self.maxSpeed = maxSpeed                     # Max translational speed
-        self.R = wheel_radius or 0.0985              # Wheel radius
-        self.L = distance_2wheels or 0.404           # Wheelbase
-        self.p1 = p1                                 # Tuning parameter
-        self.p2 = p2                                 # Tuning parameter
-        self.tolerance = tolerance                   # Distance threshold for waypoint hit
-        self.start_time = None                       # Navigation start time
-        self.waypoint_start_time = None              # Start time for current waypoint
-        self.position_history = deque(maxlen=16)     # Recent positions for stuck detection
-        self.last_position_check = None              # Last time we sampled position
+            self.index = max(0, len(self.waypoints) - 1)                          # Start at last if reverse
+        self.maxSpeed = maxSpeed                                                  # Max translational speed
+        self.R = wheel_radius or 0.0985                                           # Wheel radius
+        self.L = distance_2wheels or 0.404                                        # Wheelbase
+        self.p1 = p1                                                              # Tuning parameter
+        self.p2 = p2                                                              # Tuning parameter
+        self.tolerance = tolerance                                                # Distance threshold for waypoint hit
+        self.start_time = None                                                    # Navigation start time
+        self.waypoint_start_time = None                                           # Start time for current waypoint
+        self.position_history = deque(maxlen=16)                                  # Recent positions for stuck detection
+        self.last_position_check = None                                           # Last time we sampled position
         self.stuck_counter = 0
-        self.stuck_threshold = 8                     # Threshold for local stuck counter
-        self._finished = False                       # Internal completion flag
+        self.stuck_threshold = 8                                                  # Threshold for local stuck counter
+        self._finished = False                                                    # Internal completion flag
         self.avoid_state = "NORMAL"
-        self.avoid_start_time = None                 # When avoidance started
+        self.avoid_start_time = None                                              # When avoidance started
 
-    def _devs(self):
+    def devs(self):
         return GetRobotDevicesFromBlackboard(self.bb, 'robot', 'gps', 'compass', 'motorL', 'motorR')  # Grab devices
 
-    def _pose(self, gps, compass):
-        xw, yw = gps.getValues()[:2]                 # Current x,y from GPS
-        cv = compass.getValues()                     # Compass vector
-        th = float(np.arctan2(cv[0], cv[1]))         # Heading angle from compass vector
-        return xw, yw, th                            # Return pose 
+    def pose(self, gps, compass):
+        xw, yw = gps.getValues()[:2]                                              # Current x,y from GPS
+        cv = compass.getValues()                                                  # Compass vector
+        th = float(np.arctan2(cv[0], cv[1]))                                      # Heading angle from compass vector
+        return xw, yw, th                                                         # Return pose 
 
     def current_target(self):
         if not self.waypoints:
-            return None                              # No waypoints configured
+            return None                                                           # No waypoints configured
         if 0 <= self.index < len(self.waypoints):
-            return self.waypoints[self.index]        # Active waypoint
-        return None                                  # Out of range index
+            return self.waypoints[self.index]                                     # Active waypoint
+        return None                                                               # Out of range index
 
     def advance_waypoint(self, _robot):
         if not self.waypoints:
-            return                                   # Nothing to advance
-        self.index += self.dir                       # Move to next waypoint
+            return                                                                # Nothing to advance
+        self.index += self.dir                                                    # Move to next waypoint
         self.waypoint_start_time = None
         if hasattr(self, "sd") and self.sd.detour_active:
-            self.sd.detour_active = False            # Clear detour state
+            self.sd.detour_active = False                                         # Clear detour state
             self.sd.detour_start_time = None
 
     def all_waypoints_completed(self):
         if not self.waypoints:
-            return True                              # Empty plan counts as done
+            return True                                                           # Empty plan counts as done
         if self.dir == 1 and self.index >= len(self.waypoints):
-            return True                              # Forward traversal
+            return True                                                           # Forward traversal
         if self.dir == -1 and self.index < 0:
-            return True                              # Reverse traversal
+            return True                                                           # Reverse traversal
         return False
 
     def terminate(self):
-        L, R = self.bb.GetMotors()                   # Get motors
+        L, R = self.bb.GetMotors()                                                # Get motors
         if L and R:
-            StopMotors(L, R)                         # Stop motors safely
+            StopMotors(L, R)                                                      # Stop motors safely
         else:
-            nav_logger.Error("Motors missing from blackboard.")  # Log if missing
+            nav_logger.Error("Motors missing from blackboard.")                   # Log if missing
 
     def reset(self):
-        super().reset()                              # Reset BehaviorNode state
+        super().reset()                                                           # Reset BehaviorNode state
         if self.dir >= 0:
-            self.index = 0                           # Reset to first waypoint
+            self.index = 0                                                        # Reset to first waypoint
         else:
-            self.index = max(0, len(self.waypoints) - 1)  # Reset to last
-        self.start_time = None                       # Clear timers
+            self.index = max(0, len(self.waypoints) - 1)                          # Reset to last
+        self.start_time = None                                                    # Clear timers
         self.waypoint_start_time = None
-        self.position_history.clear()                # Clear motion history
+        self.position_history.clear()                                             # Clear motion history
         self.last_position_check = None
-        self.stuck_counter = 0                       # Reset counters
+        self.stuck_counter = 0                                                    # Reset counters
         if hasattr(self, "sd"):
-            self.sd.reset_all()                      # Reset stuck state
-        self.avoid_state = "NORMAL"                  # Back to normal
+            self.sd.reset_all()                                                   # Reset stuck state
+        self.avoid_state = "NORMAL"                                               # Back to normal
         self.avoid_start_time = None
         self._finished = False
 
@@ -198,23 +194,23 @@ class NavigationBase(BehaviorNode):
 ###############################################################################
 # ------------------------- Obstacle avoiding navigator -----------------------
 ###############################################################################
-# Navigator that reacts to obstacles
-# Uses lidar checks and detours
+# Reactive waypoint follower with lidar-based avoidance and stuck recovery.
+# Detours, backs up on close obstacles, and advances on tolerance.
 class ObstacleAvoidingNavigation(NavigationBase):
     def __init__(self, waypoints=None, bb=None, **kw):
         super().__init__("ObstacleAvoidingNavigation", waypoints, bb=bb, **kw)
         self.sd = StuckDetourState()
 
-    def _update_heading_hist(self, theta, t):
-        self.sd.heading_hist.append(theta)            # Append heading sample
-        self.sd.heading_hist_t.append(t)              # Append timestamp
+    def update_heading_hist(self, theta, t):
+        self.sd.heading_hist.append(theta)                                      # Append heading sample
+        self.sd.heading_hist_t.append(t)                                        # Append timestamp
         cut = t - 1.5
         while self.sd.heading_hist_t and self.sd.heading_hist_t[0] < cut:
-            self.sd.heading_hist_t.popleft()          # Drop old timestamp
-            self.sd.heading_hist.popleft()            # Drop matching heading
+            self.sd.heading_hist_t.popleft()                                    # Drop old timestamp
+            self.sd.heading_hist.popleft()                                      # Drop matching heading
         if len(self.sd.heading_hist) > 1:
             return abs(AngDiff(self.sd.heading_hist[-1], self.sd.heading_hist[0]))  # Total rotation span
-        return 0.0                                    # Not enough samples
+        return 0.0                                                              # Not enough samples
 
     def check_if_stuck(self, pos, t):
         if self.avoid_state != "NORMAL":
@@ -223,273 +219,308 @@ class ObstacleAvoidingNavigation(NavigationBase):
             return False
 
         if (self.last_position_check is None) or (t - self.last_position_check >= 0.25):
-            self.position_history.append((t, pos[0], pos[1]))  # Record position snapshot
-            self.last_position_check = t                       # Update sample time
+            self.position_history.append((t, pos[0], pos[1]))                   # Record position snapshot
+            self.last_position_check = t                                        # Update sample time
             if len(self.position_history) < 2:
-                return False                          # Need at least two points
+                return False                                                    # Need at least two points
 
-        t0, x0, y0 = self.position_history[0]        # Oldest sample
-        dt = self.position_history[-1][0] - t0       # Time span covered
+        t0, x0, y0 = self.position_history[0]                                   # Oldest sample
+        dt = self.position_history[-1][0] - t0                                  # Time span covered
         if dt < 2.0:
             return False
 
         dx = self.position_history[-1][1] - x0
         dy = self.position_history[-1][2] - y0
-        moved = float(np.hypot(dx, dy))              # Distance moved
-        if moved < 0.03:                             # Very little movement
+        moved = float(np.hypot(dx, dy))                                         # Distance moved
+        if moved < 0.03:                                                        # Very little movement
             self.stuck_counter += 1
             if self.stuck_counter >= self.sd.stuck_threshold:
-                self.stuck_counter = 0               # Reset local counter
-                return True                          # Declare stuck
+                self.stuck_counter = 0                                          # Reset local counter
+                return True                                                     # Declare stuck
         else:
-            self.stuck_counter = max(0, self.stuck_counter - 1)  # Decay counter on progress
+            self.stuck_counter = max(0, self.stuck_counter - 1)                 # Decay counter on progress
         return False
 
-    def _inject_detour(self, xw, yw, theta, side, t):
+    def inject_detour(self, xw, yw, theta, side, t):
         if self.sd.detour_count >= self.sd.max_detour_attempts:
-            nav_logger.Debug(f"Detour injection blocked: max attempts ({self.sd.max_detour_attempts}) reached")
+            nav_logger.Debug(f"Detour blocked: max attempts ({self.sd.max_detour_attempts}) reached")
             return False
-        d = 0.35                                      # Lateral offset
-        th = theta + np.pi / 2.0                      # Perpendicular to heading
-        dx = side * d * np.cos(th)                    # Lateral x shift
-        dy = side * d * np.sin(th)                    # Lateral y shift
-        wp = (xw + dx, yw + dy)                       # New temporary waypoint
-        self.waypoints[self.index:self.index] = [wp]  # Insert before current target
-        self.sd.detour_count += 1                     # Increment detour count
-        self.sd.detour_active = True                  # Mark active detour
-        self.sd.detour_start_time = t                 # Record start time
-        self.sd.last_detour_time = t                  # Update last detour time
-        
+        d = 0.35                                                                # Lateral offset
+        th = theta + np.pi / 2.0                                                # Perpendicular to heading
+        dx = side * d * np.cos(th)                                              # Lateral x shift
+        dy = side * d * np.sin(th)                                              # Lateral y shift
+        wp = (xw + dx, yw + dy)                                                 # New temporary waypoint
+        self.waypoints[self.index:self.index] = [wp]                            # Insert before current target
+        self.sd.detour_count += 1                                               # Increment detour count
+        self.sd.detour_active = True                                            # Mark active detour
+        self.sd.detour_start_time = t                                           # Record start time
+        self.sd.last_detour_time = t                                            # Update last detour time
         return True
 
     def execute(self):
         robot, gps, compass, L, R = GetRobotDevicesFromBlackboard(
-            self.bb, 'robot', 'gps', 'compass', 'motorL', 'motorR'  # Request core devices
+            self.bb, 'robot', 'gps', 'compass', 'motorL', 'motorR'              # Request core devices
         )
         if not (robot and gps and compass and L and R):
-            return Status.RUNNING                     # Keep ticking until devices are available
-        t = robot.getTime()                           # Current time from robot
+            return Status.RUNNING                                               # Keep ticking until devices are available
+        t = robot.getTime()                                                     # Current time from robot
         if self.start_time is None:
-            self.start_time = t                       # Initialize start time
+            self.start_time = t                                                 # Initialize start time
         if self.all_waypoints_completed():
-            StopMotors(L, R)                          # Stop when done
+            StopMotors(L, R)                                                    # Stop when done
             return Status.SUCCESS
-        xw, yw = gps.getValues()[:2]                  # Current position 
-        cv = compass.getValues()[:2]                  # Compass vector 
-        theta = float(np.arctan2(cv[0], cv[1]))       # Heading in radians
-        target = self.current_target()                # Active waypoint
+        xw, yw = gps.getValues()[:2]                                            # Current position 
+        cv = compass.getValues()[:2]                                            # Compass vector 
+        theta = float(np.arctan2(cv[0], cv[1]))                                 # Heading in radians
+        target = self.current_target()                                          # Active waypoint
         if target is None:
-            StopMotors(L, R)                          # Nothing to do, stop
+            StopMotors(L, R)                                                    # Nothing to do, stop
             return Status.SUCCESS
         if self.waypoint_start_time is None:
-            self.waypoint_start_time = t              # Start timing this waypoint
+            self.waypoint_start_time = t                                        # Start timing this waypoint
         if self.sd.detour_active and self.sd.detour_start_time is not None:
             if (t - self.sd.detour_start_time) > 15.0:
-                nav_logger.Warning("Detour timeout - clearing")  # Detour taking too long
+                nav_logger.Warning("Detour timeout - clearing")                 # Detour taking too long
                 self.sd.detour_active = False
                 self.sd.detour_start_time = None
-        lidar = self.bb.GetLidar()                    # Fetch lidar if present
+        lidar = self.bb.GetLidar()                                              # Fetch lidar if present
         if lidar:
-            ranges = np.asarray(lidar.getRangeImage())  # Convert range image to array
+            ranges = np.asarray(lidar.getRangeImage())                          # Convert range image to array
         else:
-            ranges = np.array([])                     # Empty array if no lidar
-        recent_rot = self._update_heading_hist(theta, t)
-        obstacle = False                              # Obstacle ahead
+            ranges = np.array([])                                               # Empty array if no lidar
+        recent_rot = self.update_heading_hist(theta, t)
+        obstacle = False                                                        # Obstacle ahead
         emerg = False
-        left = 10.0                                   # Defaults 
+        left = 10.0                                                             # Defaults 
         front = 10.0
         right = 10.0
         min_all = 10.0
         if ranges.size and np.isfinite(ranges).any():
             left, front, right, min_all = ScanLidarSectors(ranges) 
             if (front < 0.6) or (min_all < 0.5):
-                obstacle = True                       # Obstacle detected
+                obstacle = True                                                 # Obstacle detected
             if (front < 0.20) and (min_all < 0.17):
-                emerg = True                          # Very close = emergency
+                emerg = True                                                    # Very close = emergency
         if emerg:
             nav_logger.Error(f"Emergency stop: front={front:.2f}m min={min_all:.2f}m")  # Log details
-            SafeSetMotorVelocities(L, R, -3.0, -3.0)  # Reverse quickly
-            return Status.RUNNING                     # Keep control loop alive
+            SafeSetMotorVelocities(L, R, -3.0, -3.0)                            # Reverse quickly
+            return Status.RUNNING                                               # Keep control loop alive
         if self.avoid_state == "NORMAL":
-            if t >= self.sd.stuck_cooldown_until and recent_rot < 0.35:  # Not rotating much
-                if self.check_if_stuck((xw, yw), t):                     # Check motion over time
-                    self.sd.stuck_events += 1                            # Counter
-                    self.sd.stuck_cooldown_until = t + 1.2               # Set cooldown
-                    self.position_history.clear()                        # Reset history
+            if t >= self.sd.stuck_cooldown_until and recent_rot < 0.35:         # Not rotating much
+                if self.check_if_stuck((xw, yw), t):                            # Check motion over time
+                    self.sd.stuck_events += 1                                   # Counter
+                    self.sd.stuck_cooldown_until = t + 1.2                      # Set cooldown
+                    self.position_history.clear()                               # Reset history
                     if self.sd.stuck_events >= 3 and (target is not None):
-                        side = random.choice([-1, 1])                     # Pick left/right
-                        self._inject_detour(xw, yw, theta, side, t)      # Insert lateral detour
-                        self.sd.stuck_events = 0                         # Reset streak
-                    self.avoid_state = "REVERSING"                       # Enter reversing mode
-                    self.avoid_start_time = t                            # Record start time
-                    SafeSetMotorVelocities(L, R, -1.8, -1.8)             # Back up slowly
+                        side = random.choice([-1, 1])                           # Pick left/right
+                        self.inject_detour(xw, yw, theta, side, t)              # Insert lateral detour
+                        self.sd.stuck_events = 0                                # Reset streak
+                    self.avoid_state = "REVERSING"                              # Enter reversing mode
+                    self.avoid_start_time = t                                   # Record start time
+                    SafeSetMotorVelocities(L, R, -1.8, -1.8)                    # Back up slowly
                     return Status.RUNNING
         if obstacle:
-            side_left = left > right                 # Choose side with more clearance
+            side_left = left > right                                            # Choose side with more clearance
             if front < 0.8:
-                base = 2.0                           # Slow base speed in tighter space
+                base = 2.0                                                      # Slow base speed in tighter space
             else:
-                base = 3.0                           # Otherwise a bit faster
+                base = 3.0                                                      # Otherwise a bit faster
             if base > self.maxSpeed:
                 base = self.maxSpeed
-            steer = 0.9 if side_left else -0.9       # Steering direction/amount
-            tg = 0.7                                 # Turn gain
-            lv = np.clip(base - tg * steer, -self.maxSpeed, self.maxSpeed)  # Left velocity
-            rv = np.clip(base + tg * steer, -self.maxSpeed, self.maxSpeed)  # Right velocity
-            if front < 0.45:                         # Very close
+            steer = 0.9 if side_left else -0.9                                  # Steering direction/amount
+            tg = 0.7                                                            # Turn gain
+            lv = np.clip(base - tg * steer, -self.maxSpeed, self.maxSpeed)      # Left velocity
+            rv = np.clip(base + tg * steer, -self.maxSpeed, self.maxSpeed)      # Right velocity
+            if front < 0.45:                                                    # Very close
                 lv *= 0.5
                 rv *= 0.5
                 if side_left:
-                    rv += 1.0                         # Nudge to turn right
+                    rv += 1.0                                                   # Nudge to turn right
                 else:
-                    lv += 1.0                         # Nudge to turn left
-            SafeSetMotorVelocities(L, R, float(lv), float(rv))  # Apply wheel commands
+                    lv += 1.0                                                   # Nudge to turn left
+            SafeSetMotorVelocities(L, R, float(lv), float(rv))                  # Apply wheel commands
             if (front < 0.25) and ((t - self.sd.last_detour_time) > 2.0) and (not self.sd.detour_active):
-                self._inject_detour(xw, yw, theta, 1 if side_left else -1, t)
+                self.inject_detour(xw, yw, theta, 1 if side_left else -1, t)
             return Status.RUNNING
-        dx = target[0] - xw                          # Vector to goal x
-        dy = target[1] - yw                          # Vector to goal y
-        rho = float(np.hypot(dx, dy))                # Distance to goal
-        alpha = NormalizeAngle(np.arctan2(dy, dx) - theta)  # Heading error
-        if rho < self.tolerance:                     # Within goal tolerance
-            if abs(alpha) > 0.45:                    # If not facing roughly forward, wait to fix
+        dx = target[0] - xw                                                     # Vector to goal x
+        dy = target[1] - yw                                                     # Vector to goal y
+        rho = float(np.hypot(dx, dy))                                           # Distance to goal
+        alpha = NormalizeAngle(np.arctan2(dy, dx) - theta)                      # Heading error
+        if rho < self.tolerance:                                                # Within goal tolerance
+            if abs(alpha) > 0.45:                                               # If not facing roughly forward, wait to fix
                 return Status.RUNNING
             if (t - (self.waypoint_start_time or t)) >= 0.3:
-                self.advance_waypoint(robot)         # Advance after short wait
+                self.advance_waypoint(robot)                                    # Advance after short wait
             if self.all_waypoints_completed():
-                StopMotors(L, R)                     # Stop when plan done
+                StopMotors(L, R)                                                # Stop when plan done
                 return Status.SUCCESS
             return Status.RUNNING
-        turn_scale = min(abs(alpha) / np.pi, 0.75)   # Normalize turn demand
-        speed = max(1.2, 4.0 * (1 - turn_scale))     # Reduce speed as turn demand increases
+        turn_scale = min(abs(alpha) / np.pi, 0.75)                              # Normalize turn demand
+        speed = max(1.2, 4.0 * (1 - turn_scale))                                # Reduce speed as turn demand increases
         turn = 2.0 * alpha
-        lv = np.clip(speed - turn, -4.0, 4.0)         # Left wheel command
-        rv = np.clip(speed + turn, -4.0, 4.0)         # Right wheel command
-        SafeSetMotorVelocities(L, R, float(lv), float(rv))  # Send commands
-        return Status.RUNNING                         # Continue navigating
+        lv = np.clip(speed - turn, -4.0, 4.0)                                   # Left wheel command
+        rv = np.clip(speed + turn, -4.0, 4.0)                                   # Right wheel command
+        SafeSetMotorVelocities(L, R, float(lv), float(rv))                      # Send commands
+        return Status.RUNNING                                                   # Continue navigating
 
 
 ###############################################################################
 # ------------------------- Behavior Tree Nodes ------------------------------
 ###############################################################################
-# Nodes that run navigation tasks
-# Connects planner output to motion
+# Navigation behavior tree nodes that handle robot movement and path following
+# These nodes coordinate with the planning system to execute navigation tasks
+
 class NavigateToWaypoints(BehaviorNode):
     def __init__(self):
-        super().__init__("NavigateToWaypoints")                         # Name the node
-        self.navigator = None                                           # Created path follower
+        super().__init__("NavigateToWaypoints")                                 # Name the node
+        self.navigator = None                                                   # Created path follower
 
     def execute(self):
-        planned_path = GetFromBlackboard("planned_path")                # Retrieve path from planning stage
-        if not planned_path:                                            # No path available is an error
+        planned_path = GetFromBlackboard("planned_path")                        # Retrieve path from planning stage
+        if not planned_path:                                                    # No path available is an error
             main_logger.Error("No planned path available.")
             return Status.FAILURE
-        if self.navigator is None:                                      # Create controller on first run
+        if self.navigator is None:                                              # Create controller on first run
             nav_logger.Info(f"Starting navigation with {len(planned_path)} waypoints")
             self.navigator = ObstacleAvoidingNavigation(planned_path, bb=blackboard, traversal="once")
-        status = self.navigator.execute()                               # Step the controller
-        if status == Status.SUCCESS:                                    # If finished
-            self.navigator = None                                       # Reset for next time
+        status = self.navigator.execute()                                       # Step the controller
+        if status == Status.SUCCESS:                                            # If finished
+            self.navigator = None                                               # Reset for next time
         return status                                                   
 
     def reset(self):
-        super().reset()                                                 # Reset base node
-        self.navigator = None                                           # Drop controller instance
+        super().reset()                                                         # Reset base node
+        self.navigator = None                                                   # Drop controller instance
 
     def terminate(self):
-        if self.navigator:                                              # If running, stop safely
+        if self.navigator:                                                      # If running, stop safely
             self.navigator.terminate()
             self.navigator = None
 
 
 class BidirectionalSurveyNavigator(BehaviorNode):
     def __init__(self, survey_waypoints):
-        super().__init__("BidirectionalSurveyNavigator")                # Name the node
-        self.survey_waypoints = survey_waypoints                        # Waypoints to forward/back
+        super().__init__("BidirectionalSurveyNavigator")                        # Name the node
+        self.survey_waypoints = survey_waypoints                                # Waypoints to forward/back
         self.current_phase = 1                                        
-        self.phase2_started_time = None                                 # Time when reverse phase begins
-        self.rotation_target = None                                     # Target heading for in place rotation
-        self.navigation_controller = ObstacleAvoidingNavigation(        # Path follower instance
+        self.phase1_started_time = None                                         # Time when forward phase begins
+        self.phase2_started_time = None                                         # Time when reverse phase begins
+        self.rotation_target = None                                             # Target heading for in place rotation
+        self.navigation_controller = ObstacleAvoidingNavigation(                # Path follower instance
             survey_waypoints, tolerance=0.30, start_direction=+1
         )
 
-    def _tick_rotation(self):
-        MAX_W, GAIN = 3.0, 4.0                                           # Rotation controller params
-        ml, mr = GetFromBlackboard("motorL"), GetFromBlackboard("motorR")  # Motors
+    def reset(self):
+        super().reset()
+        self.current_phase = 1                                                  # Reset to forward phase
+        self.phase1_started_time = None                                         # Clear timing
+        self.phase2_started_time = None                                         # Clear timing
+        self.rotation_target = None                                             # Clear rotation target
+        if hasattr(self, 'started_logged'):
+            delattr(self, 'started_logged')                                     # Reset logging flag
+        if self.navigation_controller:                                          # Reset navigation controller
+            self.navigation_controller.reset()
+        self.navigation_controller = ObstacleAvoidingNavigation(                # Create fresh controller
+            self.survey_waypoints, tolerance=0.30, start_direction=+1
+        )
+
+    def tick_rotation(self):
+        MAX_W, GAIN = 3.0, 4.0                                                  # Rotation controller params
+        ml, mr = GetFromBlackboard("motorL"), GetFromBlackboard("motorR")       # Motors
         compass, lidar = GetFromBlackboard("compass"), GetFromBlackboard("lidar")  # Sensors
-        if not all([ml, mr, compass]):                                   # Need motors + compass to rotate
+        if not all([ml, mr, compass]):                                          # Need motors + compass to rotate
             main_logger.Error("Rotation error need motors and compass.")
             return True                                                  
-        lidar_ranges = np.array(lidar.getRangeImage()) if lidar else np.array([])  # LiDAR safety
+        lidar_ranges = np.array(lidar.getRangeImage()) if lidar else np.array([])  # Lidar safety
         if lidar_ranges.size and np.isfinite(lidar_ranges).any():
-            if np.min(lidar_ranges[np.isfinite(lidar_ranges)]) < 0.5:    # Too close to obstacle
-                SafeSetMotorVelocities(ml, mr, 0, 0)                  # Stop immediately
-                return False                                             # Not safe to rotate yet
-        if self.rotation_target is None:                                 # Initialize rotation goal
+            if np.min(lidar_ranges[np.isfinite(lidar_ranges)]) < 0.5:           # Too close to obstacle
+                SafeSetMotorVelocities(ml, mr, 0, 0)                            # Stop immediately
+                return False                                                    # Not safe to rotate yet
+        if self.rotation_target is None:                                        # Initialize rotation goal
             vx, vy = compass.getValues()[:2]
             self.rotation_target = NormalizeAngle(np.arctan2(vx, vy) + np.pi)
-        vx, vy = compass.getValues()[:2]                                 # Current heading
+        vx, vy = compass.getValues()[:2]                                        # Current heading
         heading = np.arctan2(vx, vy)
-        err = NormalizeAngle(self.rotation_target - heading)             # Smallest signed error
+        err = NormalizeAngle(self.rotation_target - heading)                    # Smallest signed error
         w = float(np.clip(GAIN * err, -MAX_W, MAX_W))                
-        SafeSetMotorVelocities(ml, mr, -w, w)                         # Spin in place
+        SafeSetMotorVelocities(ml, mr, -w, w)                                   # Spin in place
         if abs(err) < np.radians(10):                             
-            SafeSetMotorVelocities(ml, mr, 0, 0)                      # Stop
-            self.rotation_target = None                                  # Clear for next time
-            return True                                                  # Rotation complete
-        return False                                                     # Continue rotating
+            SafeSetMotorVelocities(ml, mr, 0, 0)                                # Stop
+            self.rotation_target = None                                         # Clear for next time
+            return True                                                         # Rotation complete
+        return False                                                            # Continue rotating
 
-    def _begin_reverse(self):
-        nav_logger.Info("Starting reverse survey loop")
-        if self.navigation_controller:                                   # Stop current controller 
+    def begin_reverse(self):
+        nav_logger.Info("Starting reverse loop")
+        if self.navigation_controller:                                          # Stop current controller 
             self.navigation_controller.terminate()
-        self.current_phase = 1.5                                         # Enter rotation phase
-        self.rotation_target = None                                      # Reset rotation target
+        self.current_phase = 1.5                                                # Enter rotation phase
+        self.rotation_target = None                                             # Reset rotation target
 
     def execute(self):
-        if self.current_phase == 1 and not hasattr(self, '_started_logged'):
-            nav_logger.Info("Starting forward survey loop")
-            self._started_logged = True
-        if self.current_phase == 1.5:                                    # Rotation between passes
-            if self._tick_rotation():                                    # If rotation finished
+        if self.current_phase == 1 and not hasattr(self, 'started_logged'):
+            nav_logger.Info("Starting forward loop")
+            self.started_logged = True
+            robot = GetFromBlackboard("robot")
+            self.phase1_started_time = robot.getTime() if robot else None
+            # Ensure trajectory is initialized
+            if not GetFromBlackboard("trajectory_points"):
+                blackboard.Set("trajectory_points", [])
+        if self.current_phase == 1.5:                                           # Rotation between passes
+            if self.tick_rotation():                                            # If rotation finished
                 self.navigation_controller = ObstacleAvoidingNavigation(
-                    self.survey_waypoints, tolerance=0.30, start_direction=-1
+                    self.survey_waypoints, tolerance=0.50, start_direction=-1
                 )
-                self.navigation_controller.reset()                        # Reset controller for reverse run
+                self.navigation_controller.reset()                              # Reset controller for reverse run
                 robot = GetFromBlackboard("robot")
-                self.phase2_started_time = robot.getTime() if robot else None  # Record start time of phase 2
-                self.current_phase = 2                                    # Now in reverse traversal
+                self.phase2_started_time = robot.getTime() if robot else None   # Record start time of phase 2
+                self.current_phase = 2                                          # Now in reverse traversal
             return Status.RUNNING
-        status = self.navigation_controller.execute()                     # Step the current traversal
-        gps = GetFromBlackboard("gps")                                    # GPS for position updates
-        start_position = GetFromBlackboard("start_xy")                    # Starting point
+        status = self.navigation_controller.execute()                           # Step the current traversal
+        gps = GetFromBlackboard("gps")                                          # GPS for position updates
+        start_position = GetFromBlackboard("start_xy")                          # Starting point
         if gps:
-            gx, gy, _ = gps.getValues()                                   # Current pose
+            gx, gy, _ = gps.getValues()                                         # Current pose
             cur = (gx, gy)
             traj = UpdateTrajectory(GetFromBlackboard("trajectory_points") or [], cur)  # Append to trajectory
-            blackboard.SetTrajectory(traj)                               # Store for UI
-            if start_position and len(traj) > 10:                        # After enough points
-                dist = Distance2D(cur, start_position)                   # Distance to origin
-                if self.current_phase == 1 and dist < 0.30:              # Near origin during forward pass
-                    self._begin_reverse()                                # Switch to rotation/reverse
-                    return Status.RUNNING
-                if self.current_phase == 2:                              # During reverse run
-                    robot = GetFromBlackboard("robot")
-                    time_gate = (robot and self.phase2_started_time is not None and
-                                 (robot.getTime() - self.phase2_started_time) > 2.0)  # Prevent instant finish
-                    if time_gate and dist < 0.30:                        # Back at start after some time
-                        return Status.SUCCESS                            # Survey complete
-        if status == Status.SUCCESS and self.current_phase == 1:         # Finished forward pass early
-            self._begin_reverse()                                        # Force reverse
-        return Status.RUNNING
+            blackboard.SetTrajectory(traj)                                      # Store for UI
+            if start_position and len(traj) > 5:                                # After enough points (reduced from 10)
+                # Check for valid start position
+                if start_position and len(start_position) == 2 and all(np.isfinite(start_position)):
+                    dist = Distance2D(cur, start_position)                      # Distance to origin
+                    if self.current_phase == 1 and dist < 0.30:                 # Near origin during forward pass - trigger reverse
+                        self.begin_reverse()                                    # Switch to rotation/reverse
+                        return Status.RUNNING
+                    if self.current_phase == 2:                                 # During reverse run
+                        robot = GetFromBlackboard("robot")
+                        time_gate = (robot and self.phase2_started_time is not None and
+                                     (robot.getTime() - self.phase2_started_time) > 2.0)  # Prevent instant finish
+                        if time_gate and dist < 0.30:                           # Back at start after some time
+                            if self.phase1_started_time is not None and robot:  # Log timing for both phases and total survey
+                                forward_time = self.phase2_started_time - self.phase1_started_time if self.phase2_started_time else 0
+                                reverse_time = robot.getTime() - self.phase2_started_time if self.phase2_started_time else 0
+                                total_time = robot.getTime() - self.phase1_started_time
+                                nav_logger.Info("Loop timing complete - starting c-space operations")
+                                nav_logger.Info(f"Forward loop: {forward_time:.1f}s")
+                                nav_logger.Info(f"Reverse loop: {reverse_time:.1f}s")
+                            blackboard.Set("survey_complete", True)             # Mark survey as complete
+                            return Status.SUCCESS                               # Survey complete
         if self.current_phase == 2 and status == Status.FAILURE and gps and start_position:  # Reverse failed
-            gx, gy, _ = gps.getValues()                                  # If we still ended near start
+            gx, gy, _ = gps.getValues()                                         # If we still ended near start
             cur = (gx, gy)
             traj = GetFromBlackboard("trajectory_points") or []
             if len(traj) > 10 and Distance2D(cur, start_position) < 0.50:
-                return Status.SUCCESS                                    # Accept as success
-        return status                                                    # Otherwise propagate status
+                if self.phase1_started_time is not None and robot:              # Log timing for fallback success case
+                    forward_time = self.phase2_started_time - self.phase1_started_time if self.phase2_started_time else 0
+                    reverse_time = robot.getTime() - self.phase2_started_time if self.phase2_started_time else 0
+                    total_time = robot.getTime() - self.phase1_started_time
+                    nav_logger.Info("Loop timing complete - starting c-space operations")
+                    nav_logger.Info(f"Forward loop: {forward_time:.1f}s")
+                    nav_logger.Info(f"Reverse loop: {reverse_time:.1f}s")
+                blackboard.Set("survey_complete", True)                         # Mark survey as complete
+                return Status.SUCCESS                                           # Accept as success
+        return status                                                           # Otherwise propagate status
 
     def terminate(self):
-        if self.navigation_controller:                                   # Stop controller on BT shutdown
+        if self.navigation_controller:                                          # Stop controller on BT shutdown
             self.navigation_controller.terminate()
