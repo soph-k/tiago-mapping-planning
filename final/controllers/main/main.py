@@ -90,3 +90,201 @@ def compute_motor_commands(             # Based on the angle error and distance 
         left_cmd = np.clip(left_cmd, -config.DRIVE_SPEED_MAX, config.DRIVE_SPEED_MAX) # Puts the wheel commands to the maximum drive speed.
         right_cmd = np.clip(right_cmd, -config.DRIVE_SPEED_MAX, config.DRIVE_SPEED_MAX) # Puts the wheel commands to the maximum drive speed.
     return float(left_cmd), float(right_cmd) # Return the left and right wheel commands.
+class MemoryBoard:                          # A simple key/value store for sharing state between subsystems.
+    def __init__(self) -> None:             # Store everything in a simple dictionary.
+        self.data: Dict[str, object] = {} 
+        self._init_defaults()               # Populate the memory board with a set of default entries.
+
+    def _init_defaults(self) -> None:       # Populate the memory board with a set of default entries.
+        self.data.update({      
+            "mapping_waypoints": RobotConfig.MAPPING_WAYPOINTS,             # The exploration waypoints defined in RobotConfig.
+            "jar_positions": RobotConfig.JAR_POSITIONS,                     # Known jar positions.
+            "dropoff_points": RobotConfig.DROPOFF_POINTS,                   # Dropoff points for jars.
+            "picked_positions": [],
+            "current_dropoff_index": 0,                                     # Indices to track progress through jars and drop points.
+            "current_jar_index": 0,
+            "mapping_complete": False,                                      # Indicate completion of various tasks.
+            "cspace_complete": False,
+            "navigation_active": False,                                     # Indicate whether navigation or jar navigation is active.
+            "jar_navigation_active": False,
+            "recognized_objects": []                                        # A list of objects recognised by the system.
+        })
+
+    def set(self, key: str, value: object) -> None: # Store an object under the given key.
+        self.data[key] = value
+
+    def get(self, key: str, default: Optional[object] = None) -> object: # Retrieve an object from the board, returning default if absent.
+        return self.data.get(key, default)
+
+    def has(self, key: str) -> bool:        # Return true if the board contains a value for key.
+        return key in self.data
+
+    def read(self, key: str, default: Optional[object] = None) -> object: # Retrieve an object from the board, returning default if absent.
+        return self.get(key, default)
+
+    def write(self, key: str, value: object) -> None: # Store an object under the given key.    
+        self.set(key, value)
+
+
+class RobotDeviceManager:                    # A base class for managing robot devices.
+    def __init__(self, robot: Robot, memory: MemoryBoard) -> None: # Initialize the robot device manager.
+        self.robot = robot
+        self.memory = memory
+        self.timestep = int(getattr(robot, "getBasicTimeStep", lambda: 32)()) # Get the simulation time step in milliseconds.
+
+    def _position(self) -> Tuple[float, float]: # Return the current x/y position of the robot. 
+        gps = self.memory.get("gps")            # Get the GPS sensor.
+        return gps.getValues()[:2] if gps else (0.0, 0.0) 
+
+    def _orientation(self) -> float:            # Return the robot's heading as an angle in radians.
+        compass = self.memory.get("compass")    # Get the compass sensor.
+        if compass:
+            values = compass.getValues() 
+            return float(np.arctan2(values[0], values[1])) # Return the heading as an angle in radians.
+        return 0.0
+
+    def _set_wheel_speeds(self, left: float, right: float) -> None: # Set the velocities of the left and right wheels.
+        motorL = self.memory.get("motorL")      # Get the left motor.
+        motorR = self.memory.get("motorR")      # Get the right motor.
+        if motorL and motorR:
+            motorL.setVelocity(left)            # Set the velocity of the left motor.
+            motorR.setVelocity(right)           # Set the velocity of the right motor.
+
+    def _stop(self) -> None:                    # Function to stop both wheels.
+        self._set_wheel_speeds(0.0, 0.0)        # Set the velocity of the left and right wheels to 0.
+
+    def _front_clear(self, thresh=0.35):        # Check if the front is clear of obstacles.
+        lidar = self.memory.get("lidar")
+        try:
+            ranges = lidar.getRangeImage()
+            if not ranges: return True
+            c0, c1 = int(len(ranges)*0.45), int(len(ranges)*0.55)
+            fr = [r for r in ranges[c0:c1] if np.isfinite(r) and r>0]
+            return (min(fr) if fr else float('inf')) > thresh
+        except Exception:
+            return True
+
+
+class BTAction(py_trees.behaviour.Behaviour):   # Wrap a function into a py_trees behaviour.
+    def __init__(self, func: Callable[[], str]) -> None: 
+        super().__init__(name=getattr(func, "__name__", "BTAction")) # Initialize the behaviour.
+        self.func = func
+
+    def update(self) -> py_trees.common.Status: 
+        result = self.func()                    # Call the underlying function.
+        if result == "SUCCESS":
+            return py_trees.common.Status.SUCCESS 
+        elif result == "FAILURE":
+            return py_trees.common.Status.FAILURE # Return failure.
+        else:
+            return py_trees.common.Status.RUNNING # Return running.
+
+
+class ArmPoseController(RobotDeviceManager):    # Move the arm into named poses.
+    def __init__(self, robot: Robot, memory: MemoryBoard, pose_name: str = 'safe') -> None: 
+        super().__init__(robot, memory)         # Initialize the robot device manager.  
+        self.pose_name = pose_name              # The name of the pose to move to.
+        self.threshold = 0.05                   # Allow a small error tolerance when checking if joints have reached their targets.  
+        self.threshold_force = -2.5             # was -5.0             
+        self.configurations: Dict[str, Dict[str, float]] = { # Define joint targets for each named pose. 
+            'safe': {                           
+                'torso_lift_joint': 0.05,      
+                'arm_1_joint': 1.600,
+                'arm_2_joint': np.pi / 4,
+                'arm_3_joint': -2.815, 
+                'arm_4_joint': 0.8854, 
+                'arm_5_joint': 0.0, 
+                'arm_6_joint': 0.0, 
+                'arm_7_joint': np.pi / 2, 
+                'gripper_left_finger_joint': 0.0, 
+                'gripper_right_finger_joint': 0.0, 
+                'head_1_joint': 0.0, 
+                'head_2_joint': 0.0 
+            },
+            'reach': {
+                'torso_lift_joint': 0.11,
+                'arm_1_joint': 1.600,
+                'arm_2_joint': np.pi / 4,
+                'arm_3_joint': 0.0,
+                'arm_4_joint': 0.8854,
+                'arm_5_joint': 0.0,
+                'arm_6_joint': 0.0,
+                'arm_7_joint': np.pi / 2,
+                'gripper_left_finger_joint': 0.045,
+                'gripper_right_finger_joint': 0.045,
+                'head_1_joint': 0.0,
+                'head_2_joint': 0.0
+            },
+            'reach_open': {
+                'torso_lift_joint': 0.11,
+                'arm_1_joint': 1.600,
+                'arm_2_joint': np.pi / 4,
+                'arm_3_joint': 0.0,
+                'arm_4_joint': 0.8854,
+                'arm_5_joint': 0.0,
+                'arm_6_joint': 0.0,
+                'arm_7_joint': np.pi / 2,
+                'gripper_left_finger_joint': 0.045,  # Max allowed is 0.045
+                'gripper_right_finger_joint': 0.045,  # Max allowed is 0.045
+                'head_1_joint': 0.0,
+                'head_2_joint': 0.0
+            },
+            'grab': {
+                'torso_lift_joint': 0.11,
+                'arm_1_joint': 1.600,
+                'arm_2_joint': np.pi / 4,
+                'arm_3_joint': 0.0,
+                'arm_4_joint': 0.8854,
+                'arm_5_joint': 0.0,
+                'arm_6_joint': 0.0,
+                'arm_7_joint': np.pi / 2,
+                'gripper_left_finger_joint': 0.0,   # was 0.01 - close fully
+                'gripper_right_finger_joint': 0.0   # was 0.01 - close fully
+            },
+            'place': {
+                'torso_lift_joint': 0.09,   # was 0.03
+                'arm_1_joint': 1.6,
+                'arm_2_joint': 0.9,
+                'arm_3_joint': 0.0,
+                'arm_4_joint': 0.8854,
+                'arm_5_joint': 0.0,
+                'arm_6_joint': 0.0,
+                'arm_7_joint': 1.576,
+                'gripper_left_finger_joint': 0.0,
+                'gripper_right_finger_joint': 0.0,
+                'head_1_joint': 0.0,
+                'head_2_joint': 0.0
+            }
+        }
+
+        if self.pose_name not in self.configurations:   # If the requested pose is unknown, default to safe.
+            print(f" Unknown pose '{self.pose_name}', defaulting to 'safe'.") # Print a message to the console.
+            self.pose_name = 'safe'                     # Set the pose name to safe.
+        
+        self.target_positions: Dict[str, float] = copy.deepcopy( # Store the desired joint targets for the chosen pose.
+            self.configurations[self.pose_name]         # Get the desired joint targets for the chosen pose.
+        )
+        self.joint_motors: Dict[str, object] = {}       # Dictionary for motors.
+        self.joint_sensors: Dict[str, object] = {}      # Dictionary for position sensors.
+
+    def setup(self) -> None:                            # Retrieve motor devices for each joint mentioned in the target.
+        for joint_name in self.target_positions:        # For each joint in the target positions.
+            motor = getattr(self.robot, "getDevice", lambda name: None)(joint_name) # Get the motor device for the joint.
+            if motor:                                    # If the motor device is found.
+                self.joint_motors[joint_name] = motor    # Store the motor device in the dictionary.
+
+        sensor_names = [
+            'torso_lift_joint_sensor', 'arm_1_joint_sensor', 'arm_2_joint_sensor',
+            'arm_3_joint_sensor', 'arm_4_joint_sensor', 'arm_5_joint_sensor',
+            'arm_6_joint_sensor', 'arm_7_joint_sensor',
+            'gripper_left_sensor_finger_joint', 'gripper_right_sensor_finger_joint',
+            'head_1_joint_sensor', 'head_2_joint_sensor'
+        ]
+        for s_name in sensor_names:                        # For each sensor in the sensor names.
+            sensor = getattr(self.robot, "getDevice", lambda name: None)(s_name) # Get the sensor device for the sensor.
+            if sensor:                                      # If the sensor device is found.
+                try:
+                    sensor.enable(self.timestep)            # Enable the sensor.
+                except Exception:
+                    pass
+                self.joint_sensors[s_name] = sensor         # Store the sensor device in the dictionary.
