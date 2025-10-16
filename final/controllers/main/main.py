@@ -107,7 +107,7 @@ class MemoryBoard:                          # A simple key/value store for shari
             "cspace_complete": False,
             "navigation_active": False,                                     # Indicate whether navigation or jar navigation is active.
             "jar_navigation_active": False,
-            "recognized_objects": []                                        # A list of objects recognised by the system.
+            "recognized_objects": []                                        # A list of objects recognized by the system.
         })
 
     def set(self, key: str, value: object) -> None: # Store an object under the given key.
@@ -578,7 +578,7 @@ class WaitForContact(py_trees.behaviour.Behaviour): # Wait until the gripper con
 
 
 class DriveForwardTime(py_trees.behaviour.Behaviour):
-    """Drive forward at constant speed for a fixed time"""
+    # Drive forward at constant speed for a fixed time
     def __init__(self, robot_manager: RobotDeviceManager, duration: float, speed: float = 0.2, name: str = "Drive Forward") -> None:
         super().__init__(name)
         self.robot_manager = robot_manager
@@ -605,7 +605,7 @@ class DriveForwardTime(py_trees.behaviour.Behaviour):
 
 
 class DriveUntilGripperContact(py_trees.behaviour.Behaviour):
-    """Drive forward slowly until gripper fingers detect contact with jar"""
+    #Drive forward slowly until gripper fingers detect contact with jar
     def __init__(self, robot_manager: RobotDeviceManager, max_duration: float = 3.0, speed: float = 0.12, name: str = "Drive Until Contact") -> None:
         super().__init__(name)
         self.robot_manager = robot_manager
@@ -650,10 +650,10 @@ class DriveUntilGripperContact(py_trees.behaviour.Behaviour):
             # Higher threshold = need more force = drive farther before stopping
             if left_force < -2.5 or right_force < -2.5:
                 self.robot_manager._stop()
-                print(f"[GRIPPER CONTACT] Detected! L:{left_force:.2f}N R:{right_force:.2f}N after {elapsed:.2f}s")
+                print(f" Detected! L:{left_force:.2f}N R:{right_force:.2f}N after {elapsed:.2f}s")
                 return py_trees.common.Status.SUCCESS
         except Exception as e:
-            print(f"[GRIPPER CONTACT] Error reading force: {e}")
+            print(f" Error reading force: {e}")
             pass
         
         # Safety checks
@@ -662,14 +662,1086 @@ class DriveUntilGripperContact(py_trees.behaviour.Behaviour):
         
         if distance > 0.7:  # Driven too far 
             self.robot_manager._stop()
-            print(f"[GRIPPER CONTACT] Distance limit reached: {distance:.2f}m - NO CONTACT DETECTED")
+            print(f" Distance limit reached: {distance:.2f}m - NO CONTACT DETECTED")
             return py_trees.common.Status.FAILURE
         
         if elapsed > self.max_duration:  # Taken too long
             self.robot_manager._stop()
-            print(f"[GRIPPER CONTACT] Time limit reached: {elapsed:.2f}s - NO CONTACT DETECTED")
+            print(f"[Time limit reached: {elapsed:.2f}s - NO CONTACT DETECTED")
             return py_trees.common.Status.FAILURE
         
         # Keep driving forward slowly
         self.robot_manager._set_wheel_speeds(self.speed, self.speed)
         return py_trees.common.Status.RUNNING
+
+
+class CheckJarDetection(py_trees.behaviour.Behaviour): # Check if a jar is detected in front of the robot.
+    def __init__(
+        self,
+        robot_manager: RobotDeviceManager,
+        name: str = "Check Jar Detection",
+    ) -> None:
+        super().__init__(name)                        # Initialize the behaviour.
+        self.robot_manager = robot_manager            # The robot manager.
+
+    def update(self) -> py_trees.common.Status:       # Update the check jar detection behaviour.
+        if isinstance(self.robot_manager, PickPlaceController): # If the robot manager is a PickPlaceController.
+            detected = self.robot_manager._jar_in_front() # Ask the robot manager whether a jar is directly ahead.
+        else:
+            detected = False
+        return (
+            py_trees.common.Status.SUCCESS
+            if detected
+            else py_trees.common.Status.FAILURE
+        )
+
+
+class PickPlaceController(RobotDeviceManager):          # Controller to coordinate picking up jars and placing them on the table.
+    def __init__(self, robot: Robot, memory: MemoryBoard) -> None: # Initialize the pick place controller.
+        super().__init__(robot, memory)                 # Initialize the robot device manager.
+        self.tree: Optional[py_trees.trees.BehaviourTree] = None # The behaviour tree for handling all jars.
+        self.setup_behavior_tree()                      # Setup the behaviour tree.
+
+    def move_towards( 
+        self, 
+        target: Tuple[float, float], # The target position.
+        max_speed: float = 1.5, # The maximum speed.
+        turn_gain: float = 2.0, # The gain for the turn.
+    ) -> bool:
+        cur = self._position() # Get the current position.
+        heading = self._orientation() # Get the current heading.
+        dx = target[0] - cur[0] # Compute the difference in x.
+        dy = target[1] - cur[1] # Compute the difference in y.
+        dist = np.hypot(dx, dy) # Compute the distance to the target.
+        if dist < 0.6: # If the distance to the target is less than 0.6.
+            self._stop() # Stop the robot.
+            return True # Return True.
+        desired = np.arctan2(dy, dx) # Compute the desired heading.
+        angle_err = wrap_angle(desired - heading) # Compute the angle error.
+        speed_limit = max_speed # Set the speed limit.
+        if dist < 0.8: # If the distance to the target is less than 0.8.
+            speed_limit = min(speed_limit, 0.4) # Set the speed limit to 0.4.
+        base_speed = speed_limit * min(dist / 1.5, 1.0) # Compute the base speed.
+        left = base_speed - turn_gain * angle_err # Compute the left wheel speed.
+        right = base_speed + turn_gain * angle_err # Compute the right wheel speed.
+        left = float(np.clip(left, -1.5, 1.5)) # Clamp the left wheel speed.
+        right = float(np.clip(right, -1.5, 1.5)) # Clamp the right wheel speed.
+        
+        # CRITICAL: Apply reactive obstacle avoidance during pick/place operations
+        left, right = self._apply_reactive_avoidance(left, right, heading)
+        
+        self._set_wheel_speeds(left, right) # Set the wheel speeds.
+        return False # Return False.
+
+    def _apply_reactive_avoidance(
+        self, 
+        left_cmd: float, 
+        right_cmd: float, 
+        robot_heading: float
+    ) -> Tuple[float, float]:
+        """Apply reactive obstacle avoidance using lidar during pick/place operations"""
+        try:
+            # Get lidar sensor readings
+            lidar = self.memory.get("lidar")
+            if not lidar:
+                return left_cmd, right_cmd
+            
+            try:
+                ranges = lidar.getRangeImage()
+                if not ranges or len(ranges) == 0:
+                    return left_cmd, right_cmd
+            except Exception:
+                return left_cmd, right_cmd
+            
+            # Check for obstacles in different sectors
+            def get_sector_min(start_idx: int, end_idx: int) -> float:
+                sector = ranges[start_idx:end_idx]
+                valid = [r for r in sector if np.isfinite(r) and r > 0.1]
+                return min(valid) if valid else float('inf')
+            
+            # Define sectors (240-degree lidar)
+            total = len(ranges)
+            center_start = int(total * 0.45)
+            center_end = int(total * 0.55)
+            front_left_start = int(total * 0.30)
+            front_left_end = center_start
+            front_right_start = center_end
+            front_right_end = int(total * 0.70)
+            left_start = int(total * 0.15)
+            left_end = front_left_start
+            right_start = front_right_end
+            right_end = int(total * 0.85)
+            
+            # Get minimum distances in each sector
+            front_center = get_sector_min(center_start, center_end)
+            front_left = get_sector_min(front_left_start, front_left_end)
+            front_right = get_sector_min(front_right_start, front_right_end)
+            left_side = get_sector_min(left_start, left_end)
+            right_side = get_sector_min(right_start, right_end)
+            
+            # Obstacle thresholds
+            obstacle_threshold = 0.4  # meters - closer threshold, less aggressive
+            
+            # Check for obstacles
+            obstacles = {
+                'front_center': front_center < obstacle_threshold,
+                'front_left': front_left < obstacle_threshold,
+                'front_right': front_right < obstacle_threshold,
+                'left': left_side < obstacle_threshold,
+                'right': right_side < obstacle_threshold
+            }
+            
+            # Apply reactive avoidance behaviors
+            # If something is directly in front, turn away
+            if obstacles['front_center'] or (obstacles['front_left'] and obstacles['front_right']):
+                print(f"[REACTIVE AVOIDANCE] Obstacle detected during pick/place! Front: {front_center:.2f}m")
+                if obstacles['front_left'] and not obstacles['front_right']:
+                    # Turn right away from left obstacle (gentler)
+                    print("[REACTIVE AVOIDANCE] Turning right to avoid left obstacle")
+                    return 1.5, -1.5
+                elif obstacles['front_right'] and not obstacles['front_left']:
+                    # Turn left away from right obstacle (gentler)
+                    print("[REACTIVE AVOIDANCE] Turning left to avoid right obstacle")
+                    return -1.5, 1.5
+                else:
+                    # Default turn right if blocked in front (gentler)
+                    print("[REACTIVE AVOIDANCE] Turning right (default avoidance)")
+                    return 1.5, -1.5
+            
+            # If obstacle on left side, bias right (gentle adjustment)
+            if obstacles['left']:
+                right_cmd *= 1.1
+            
+            # If obstacle on right side, bias left (gentle adjustment)
+            if obstacles['right']:
+                left_cmd *= 1.1
+            
+            return left_cmd, right_cmd
+            
+        except Exception:
+            # If any error occurs, return original commands
+            return left_cmd, right_cmd
+
+    def _jar_in_front(self) -> bool: # Return True if a jar is detected directly ahead of the robot.
+        lidar = self.memory.get("lidar") # Get the lidar device from memory.
+        if lidar: # If the lidar device is found.
+            try: # Try to get the range image from the lidar.
+                ranges = lidar.getRangeImage() # Get the range image from the lidar.
+                if ranges: # If the range image is found.
+                    start = int(len(ranges) * 0.4) # Compute the start index.
+                    end = int(len(ranges) * 0.6) # Compute the end index.
+                    front = ranges[start:end] # Get the front part of the range image.
+                    if front and min(front) < 0.45: # If the front part of the range image is found and the minimum value is less than 0.45.
+                        return True # Return True.
+            except Exception: # If an error occurs.
+                pass
+        camera = self.memory.get("camera")          # Get the camera device from memory.
+        if camera: # If the camera device is found.
+            try: # Try to get the recognition objects from the camera.
+                objs = camera.getRecognitionObjects() # Get the recognition objects from the camera.
+                for obj in objs: # For each object.
+                    pos = obj.getPosition() # Get the position of the object.
+                    if pos and np.linalg.norm(pos) < 0.3: 
+                        return True # Return True.
+            except Exception: # If an error occurs.
+                pass
+        return False # Return False.
+
+    def create_jar_sequence(self, jar_index: int) -> py_trees.composites.Sequence: # Create a behaviour sequence for processing a single jar.
+        jar_pos = RobotConfig.JAR_POSITIONS[jar_index] # Get the position of the jar.
+        drop_pos = RobotConfig.DROPOFF_POINTS[min(jar_index, len(RobotConfig.DROPOFF_POINTS) - 1)] # Get the drop off point.
+        sequence = py_trees.composites.Sequence(f"Process Jar {jar_index}", memory=True) # Create a sequence for processing a single jar.
+        
+        sequence.add_child(MoveToPose(self, 'safe', f"Safe Start Jar {jar_index}")) # Move the arm to the safe starting position.
+        sequence.add_child(
+            RotateToTarget(self, jar_pos[:2], f"Rotate to Jar {jar_index}")
+        )
+        
+        # Simple approach: extend arm with gripper open
+        sequence.add_child(MoveToPose(self, 'reach', f"Extend to Jar {jar_index}"))
+        
+        # Navigate to jar position
+        move_or_detect = py_trees.composites.Selector(f"Move or Detect Jar {jar_index}", memory=False)
+        move_or_detect.add_child(CheckJarDetection(self, f"Check Jar {jar_index} Detection"))
+        move_or_detect.add_child(MoveToTarget(self, jar_pos[:2], max_speed=0.3, name=f"Move to Jar {jar_index}"))
+        sequence.add_child(move_or_detect)
+        
+        # Drive forward to push jar deep into gripper
+        # Jar 3 needs more time to reach deeper into the jar
+        if jar_index == 2:
+            sequence.add_child(DriveForwardTime(self, duration=5.5, speed=0.2, name=f"Drive Into Jar {jar_index}"))
+        else:
+            sequence.add_child(DriveForwardTime(self, duration=1.5, speed=0.2, name=f"Drive Into Jar {jar_index}"))
+        
+        # Close gripper to grab
+        sequence.add_child(MoveToPose(self, 'grab', f"Grab Jar {jar_index}")) # Close the gripper to grab the jar.
+        
+        # Jar 3 needs more backup distance before going to safe mode
+        if jar_index == 2:
+            sequence.add_child(RetreatFromPosition(self, distance=0.7, name=f"Retreat from Jar {jar_index}")) # More backup for jar 3
+        else:
+            sequence.add_child(RetreatFromPosition(self, name=f"Retreat from Jar {jar_index}")) # Normal backup for jars 1&2
+        sequence.add_child(MoveToPose(self, 'safe', f"Safe Carry Jar {jar_index}")) # Return the arm to safe carry position.
+        sequence.add_child(
+            RotateToTarget(self, drop_pos[:2], f"Rotate to Table {jar_index}")
+        )
+        sequence.add_child(
+            MoveToTarget(self, drop_pos[:2], max_speed=0.25, name=f"Approach Table {jar_index}")  # slower
+        )
+        sequence.add_child(MoveToPose(self, 'place', f"Extend to Table {jar_index}"))  # extend only after arriving
+        if jar_index == 2: # If the jar index is 2.
+            sequence.add_child(WaitSeconds(self, 1.5, f"Stabilise at Table {jar_index}")) # For the third jar we add an extra pause to ensure the arm stabilises above the placement spot.  Without this delay the jar might be released prematurely or not quite above the table.
+        sequence.add_child(
+            WaitAndOpenGripper(self, wait_time=0.5, name=f"Place Jar {jar_index}")
+        )
+        return sequence
+
+    def setup_behavior_tree(self) -> None: # Build the behaviour tree for processing all jars in sequence.
+        root = py_trees.composites.Sequence("Pick Place All Jars", memory=True) # Use a memoryful sequence here so that the controller remembers which jar it is processing across ticks.  Without memory the root would restart from the first jar every time run() is called.
+        for i in range(len(RobotConfig.JAR_POSITIONS)):
+            jar_sequence = self.create_jar_sequence(i)
+            root.add_child(jar_sequence)
+        root.add_child(MoveToPose(self, 'safe', "Final Safe Position")) # After all jars are processed, move the arm back to safe position.
+        self.tree = py_trees.trees.BehaviourTree(root)
+        try: # Try to setup the behaviour tree.
+            self.tree.setup(timeout=15) # Setup the behaviour tree.
+        except Exception: # If an error occurs.
+            pass
+
+    def run(self) -> str: # Run the behaviour tree and return its status.
+        if self.tree is None: # If the behaviour tree is not found.
+            return "FAILURE"
+        self.tree.tick()
+        status = self.tree.root.status # Get the status of the behaviour tree.
+        if status == py_trees.common.Status.SUCCESS: # If the behaviour tree is successful.
+            print("All pick and place operations completed!") # Print a message to the console.
+            return "SUCCESS" # Return success.
+        elif status == py_trees.common.Status.FAILURE: # If the behaviour tree is failed.
+            print("Pick and place operations failed!") # Print a message to the console.
+            return "FAILURE" # Return failure.
+        else: # If the behaviour tree is running.
+            return "RUNNING" # Return running.
+
+
+class NavigationController(RobotDeviceManager):
+    def __init__(self, robot: Robot, memory: MemoryBoard) -> None:
+        super().__init__(robot, memory)
+        self.prob_map: np.ndarray = np.zeros((RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE), dtype=np.float32) 
+        self.trajectory_points: deque[Tuple[float, float]] = deque(maxlen=3000) # A deque to store the robot's recent trajectory for display. 
+        self.LIDAR_OFFSET_X = 0.202 
+        self.LIDAR_START_IDX = 80
+        self.LIDAR_END_IDX = -80
+        self.waypoints = RobotConfig.MAPPING_WAYPOINTS # Waypoints for exploration.
+        self.current_wp_idx = 0
+        self.start_time: Optional[float] = None
+        self.max_mapping_time = 90.0 # Maximum time allocated for mapping
+        self.max_mapping_time = 90.0
+        self.sensor_array: Dict[str, object] = {}   # Sensor array for LIDAR, GPS and compass. 
+        self.arm_motors: Dict[str, object] = {} # Placeholders for arm motors 
+        self.sensor_array_positioned = False # Flags to ensure the sensor array has been moved out of the way.
+        
+        # Path planning variables
+        self.planned_path: List[Tuple[float, float]] = []
+        self.current_path_idx = 0
+        self.use_path_planning = False
+
+    def initialize_sensor_array(self) -> bool: 
+        lidar = self.memory.get("lidar") # Get the lidar device from memory.
+        if lidar: # If the lidar device is found.
+            self.sensor_array['lidar'] = lidar # Bind the lidar device to the sensor array.
+        joint_names = [
+            'torso_lift_joint', 'arm_1_joint', 'arm_2_joint', 'arm_3_joint',
+            'arm_4_joint', 'arm_5_joint', 'arm_6_joint', 'arm_7_joint',
+            'gripper_left_finger_joint', 'gripper_right_finger_joint',
+            'head_1_joint', 'head_2_joint'
+        ]
+        for joint_name in joint_names: # For each joint name.
+            motor = getattr(self.robot, "getDevice", lambda name: None)(joint_name) # Get the motor device for the joint.
+            if motor: # If the motor device is found.
+                self.arm_motors[joint_name] = motor # Bind the motor device to the arm motors.
+        gps = self.memory.get("gps") # Get the gps device from memory.
+        compass = self.memory.get("compass") # Get the compass device from memory.
+        if gps and compass: # If the gps and compass devices are found.
+            self.sensor_array['gps'] = gps # Bind the gps device to the sensor array.
+            self.sensor_array['compass'] = compass # Bind the compass device to the sensor array.
+        return self._set_sensor_array_position() # Set the sensor array position.
+
+    def _set_sensor_array_position(self) -> bool: # Set the sensor array position.
+        if self.sensor_array_positioned: # If the sensor array has been moved out of the way.
+            return True # Return True.
+        if self.memory.get("jar_picking_started", False): # If the jar picking has started.
+            return False # Return False.
+        system_instance = self.memory.get("system_instance") # Get the system instance from memory.
+        if system_instance and getattr(system_instance, 'state', None) == "MANIPULATION": # If the system instance is found and the state is MANIPULATION.
+            return False # Return False.
+        sensor_array_config = {
+            'torso_lift_joint': 0.25,
+            'arm_1_joint': 1.5708,
+            'arm_2_joint': 1.0472,
+            'arm_3_joint': 1.5708,
+            'arm_4_joint': 0.0,
+            'arm_5_joint': 0.1745,
+            'arm_6_joint': -1.5708,
+            'arm_7_joint': -0.0175,
+            'gripper_left_finger_joint': 0.045,
+            'gripper_right_finger_joint': 0.045,
+            'head_1_joint': 0.0,
+            'head_2_joint': 0.0
+        }
+        success = 0 # Initialize the success counter.
+        for joint, position in sensor_array_config.items(): # For each joint and position.
+            motor = self.arm_motors.get(joint) # Get the motor device for the joint.
+            if motor: # If the motor device is found.
+                motor.setPosition(position) # Set the position of the motor.
+                motor.setVelocity(0.5) # Set the velocity of the motor.
+                success += 1 # Increment the success counter.
+        self.sensor_array_positioned = success > 0 # Set the sensor array positioned.
+        self.memory.set("sensor_array_positioned", True) 
+        self.memory.set("navigation_arm_ready", True) 
+        return self.sensor_array_positioned # Return the sensor array positioned.
+
+    def execute_mapping(self) -> str: 
+        if not self.sensor_array_positioned: # If the sensor array is not positioned.
+            print("Positioning sensor array for navigation") # Print a message to the console.
+            self.initialize_sensor_array() # Initialize the sensor array.
+        if self.start_time is None: # If the start time is not found.
+            self.start_time = getattr(self.robot, "getTime", lambda: 0.0)() # Record the start time.
+            print("Beginning navigation and mapping phase") # Print a message to the console.
+        elapsed = getattr(self.robot, "getTime", lambda: 0.0)() - self.start_time # Get the elapsed time.
+        # Stop mapping after the maximum time has elapsed.
+        if elapsed > self.max_mapping_time: # If the elapsed time is greater than the maximum mapping time.
+            return self._finish_mapping() # Finish the mapping.
+        # Stop mapping after all waypoints have been visited.
+        if self.current_wp_idx >= len(self.waypoints): # If the current waypoint index is greater than or equal to the number of waypoints.
+            print("All navigation waypoints visited, finishing mapping.") # Print a message to the console.
+            return self._finish_mapping() # Finish the mapping.
+        current_pos = self._position() # Get the current position.
+        current_angle = self._orientation() # Get the current angle.
+        if len(current_pos) < 2: # If the current position is less than 2.
+            return "FAILURE" # Return failure.
+        xw, yw = current_pos # Get the current position.
+        self.trajectory_points.append((xw, yw)) # Record the robot's trajectory for display.
+        self._update_map(xw, yw, current_angle) # Update the probability map with LIDAR data.
+        
+        # Update path planning if C-space is available
+        self._update_path_planning((xw, yw))
+        
+        # Get current target (either from planned path or direct waypoint)
+        target_x, target_y = self._get_current_target((xw, yw))
+        
+        dx, dy = target_x - xw, target_y - yw # Get the distance to the current target.
+        rho = np.sqrt(dx * dx + dy * dy) # Get the distance to the current target.
+        
+        # Check if we've reached the current target
+        if rho < RobotConfig.DIST_TOL: # If the distance to the current target is less than the distance tolerance.
+            if self.use_path_planning and self.planned_path and self.current_path_idx < len(self.planned_path) - 1:
+                # Move to next waypoint in planned path
+                self.current_path_idx += 1
+                print(f"Reached path waypoint {self.current_path_idx}, moving to next")
+            else:
+                # Reached final waypoint, advance to next main waypoint
+                self.current_wp_idx += 1
+                self.current_path_idx = 0
+                self.planned_path = []
+                self.use_path_planning = False
+                print(f"Reached waypoint {self.current_wp_idx-1}, moving to next waypoint")
+            return "RUNNING"
+            
+        goal_theta = np.arctan2(dy, dx) # Get the goal angle.
+        alpha = wrap_angle(goal_theta - current_angle) # Get the angle to the current target.
+        left_cmd, right_cmd = compute_motor_commands(alpha, rho) # Compute the motor commands.
+        # Apply simple obstacle avoidance based on sensor readings.
+        if self.sensor_array_positioned: # If the sensor array is positioned.
+            left_cmd, right_cmd = self._apply_sensor_array_avoidance(left_cmd, right_cmd, current_angle) # Apply the sensor array avoidance.
+        self._set_wheel_speeds(left_cmd, right_cmd) # Set the wheel speeds.
+        self.memory.set("prob_map", self.prob_map) # Store the probability map in memory.
+        self.memory.set("trajectory_points", list(self.trajectory_points)) # Store the trajectory in memory.
+        return "RUNNING"
+
+    def _apply_sensor_array_avoidance(
+        self,
+        left_cmd: float,
+        right_cmd: float,
+        robot_heading: float,
+    ) -> Tuple[float, float]:
+        try: # Try to apply the sensor array avoidance.
+            obstacles = self.check_obstacles()
+            # If something is directly in front, turn in place away from it.
+            if obstacles['front_center'] or (
+                obstacles['front_left'] and obstacles['front_right'] 
+            ):
+                if obstacles['front_left'] and not obstacles['front_right']:
+                    return 2.0, -2.0
+                elif obstacles['front_right'] and not obstacles['front_left']:
+                    return -2.0, 2.0
+                else:
+                    return 2.0, -2.0
+            if obstacles['left']:
+                right_cmd *= 1.2
+            if obstacles['right']:
+                left_cmd *= 1.2
+            return left_cmd, right_cmd
+        except Exception:
+            return left_cmd, right_cmd
+
+    def check_obstacles(self) -> Dict[str, bool]: # Check for obstacles.
+        readings = self.get_sensor_readings() # Get the sensor readings.
+        return {
+            'front_center': readings.get('front_center', float('inf')) < 0.6, # Front center obstacle.
+            'front_left': readings.get('front_left', float('inf')) < 0.6, # Front left obstacle.
+            'front_right': readings.get('front_right', float('inf')) < 0.6, # Front right obstacle.
+            'left': readings.get('left', float('inf')) < 0.6, # Left obstacle.
+            'right': readings.get('right', float('inf')) < 0.6
+        }
+
+    def get_sensor_readings(self) -> Dict[str, float]: # Get the sensor readings.
+        readings: Dict[str, float] = {} # Initialize the readings dictionary.
+        lidar = self.sensor_array.get('lidar') # Get the lidar device from the sensor array.
+        if lidar: # If the lidar device is found.
+            try:
+                lidar_ranges = np.array(lidar.getRangeImage()) # Get the lidar ranges.
+                readings['lidar'] = lidar_ranges # Store the lidar ranges in the readings dictionary.
+                readings['front_center'] = self._get_lidar_sector(lidar_ranges, -15, 15) # Front center obstacle.
+                readings['front_left'] = self._get_lidar_sector(lidar_ranges, -45, -15) # Front left obstacle.
+                readings['front_right'] = self._get_lidar_sector(lidar_ranges, 15, 45) # Front right obstacle.
+                readings['left'] = self._get_lidar_sector(lidar_ranges, -90, -45) # Left obstacle.
+                readings['right'] = self._get_lidar_sector(lidar_ranges, 45, 90) # Right obstacle.
+            except Exception:
+                pass
+        gps = self.sensor_array.get('gps') # Get the gps device from the sensor array.
+        compass = self.sensor_array.get('compass') # Get the compass device from the sensor array.
+        if gps and compass: # If the gps and compass devices are found.
+            readings['position'] = gps.getValues() # Store the gps values in the readings dictionary.
+            readings['orientation'] = np.arctan2(compass.getValues()[0], compass.getValues()[1])
+        return readings
+
+    def _get_lidar_sector(
+        self, ranges: np.ndarray, start_angle: float, end_angle: float
+    ) -> float: # Return the minimum range in a sector of the LIDAR scan.
+        if len(ranges) == 0: # If the ranges are empty.
+            return float('inf') # Return infinity.
+        total_angle = 240  
+        center_index = len(ranges) // 2
+        start_idx = center_index + int(start_angle * len(ranges) / total_angle) # Calculate the start index.
+        end_idx = center_index + int(end_angle * len(ranges) / total_angle) # Calculate the end index.
+        start_idx = max(0, min(start_idx, len(ranges) - 1)) # Calculate the start index.
+        end_idx = max(0, min(end_idx, len(ranges) - 1)) # Calculate the end index.
+        if start_idx > end_idx: # If the start index is greater than the end index.
+            start_idx, end_idx = end_idx, start_idx # Swap the start and end indices.
+        sector_ranges = ranges[start_idx:end_idx + 1] # Get the sector ranges.
+        valid_ranges = [r for r in sector_ranges if np.isfinite(r) and r > 0.1] # Get the valid ranges.
+        return min(valid_ranges) if valid_ranges else float('inf')
+
+    def _update_map(self, robot_x: float, robot_y: float, robot_theta: float) -> None: # Update the map.
+        lidar = self.memory.get("lidar") # Get the lidar device from memory.
+        if not lidar: # If the lidar device is not found.
+            return 
+        try:
+            lidar_ranges = np.array(lidar.getRangeImage()) # Get the lidar ranges.
+            if len(lidar_ranges) == 0: # If the lidar ranges are empty.
+                return 
+            angles = np.linspace(2 * np.pi / 3, -2 * np.pi / 3, len(lidar_ranges)) # Get the angles.
+            valid_start = max(0, self.LIDAR_START_IDX) # Get the valid start index.
+            valid_end = min(len(lidar_ranges), len(lidar_ranges) + self.LIDAR_END_IDX) # Get the valid end index.
+            valid_ranges: List[float] = [] # Initialize the valid ranges list.
+            valid_angles: List[float] = [] # Initialize the valid angles list.
+            for i in range(valid_start, valid_end): # For each valid index.
+                range_val = lidar_ranges[i] # Get the range value.
+                if not np.isfinite(range_val): # If the range value is not finite.
+                    range_val = 100.0 # Set the range value to 100.0.
+                if 0.12 < range_val < 8.0: 
+                    valid_ranges.append(range_val) # Add the range value to the valid ranges list.
+                    valid_angles.append(angles[i]) # Add the angle to the valid angles list.
+            if not valid_ranges: # If the valid ranges list is empty.
+                return 
+            w_T_r = np.array([
+                [np.cos(robot_theta), -np.sin(robot_theta), robot_x], # Rotation matrix.
+                [np.sin(robot_theta), np.cos(robot_theta), robot_y], # Rotation matrix.
+                [0, 0, 1] # Rotation matrix.
+            ])
+            X_r = np.array([
+                np.array(valid_ranges) * np.cos(valid_angles) + self.LIDAR_OFFSET_X, 
+                np.array(valid_ranges) * np.sin(valid_angles), 
+                np.ones(len(valid_ranges)) 
+            ])
+            world_points = w_T_r @ X_r
+            for i, (x_world, y_world) in enumerate(zip(world_points[0], world_points[1])): # For each world point.
+                px, py = world_to_pixel(x_world, y_world) # Convert the world point to a pixel.
+                if 0 <= px < RobotConfig.MAP_WIDTH and 0 <= py < RobotConfig.MAP_SIZE: # If the pixel is within the map.
+                    distance = valid_ranges[i] # Get the distance.
+                    weight = 0.008 if distance < 1.0 else 0.006 if distance < 3.0 else 0.004 # Get the weight.
+                    self.prob_map[px, py] += weight # Add the weight to the probability map.
+                    self.prob_map[px, py] = min(self.prob_map[px, py], 1.0) # Add the probability map.
+        except Exception:
+            pass
+
+    def _finish_mapping(self) -> str: 
+        print("Finishing mapping phase, generating configuration space") # Print a message to the console.
+        self._set_wheel_speeds(0.0, 0.0) # Set the wheel speeds to 0.0.
+        self.memory.set("prob_map", self.prob_map) # Store the probability map in memory.
+        self.memory.set("trajectory_points", list(self.trajectory_points)) # Store the trajectory in memory.
+        try:
+            cspace_map = self.generate_cspace() # Generate the configuration space.
+            self.memory.set("cspace", cspace_map) # Store the configuration space in memory.
+        except Exception:
+            pass
+        self.memory.set("mapping_complete", True)
+        print("Configuration space generated, mapping phase complete.")
+        return "SUCCESS"
+
+    def generate_cspace(self) -> np.ndarray: # Generate the configuration space.
+        print("Generating configuration space") # Print a message to the console.
+        radius_pixels = 4 # Get the radius in pixels.
+        down_factor = 4 # Get the down factor.
+        prob_small = self.prob_map[::down_factor, ::down_factor] # Get the probability map.
+        radius_small = max(1, radius_pixels // down_factor) # Get the radius in pixels.
+        small_offsets: List[Tuple[int, int]] = [] # Initialize the small offsets list.
+        for dx in range(-radius_small, radius_small + 1): # For each dx.
+            for dy in range(-radius_small, radius_small + 1): # For each dy.
+                if dx * dx + dy * dy <= radius_small * radius_small: # If the distance is less than the radius.
+                    small_offsets.append((dx, dy)) # Add the offset to the small offsets list.
+        cspace_small = np.ones_like(prob_small, dtype=np.float32) # Initialize the small configuration space.
+        obstacles_small = np.where(prob_small > 0.005) # Find the obstacles.
+        for idx in range(len(obstacles_small[0])): # For each obstacle.
+            x, y = obstacles_small[0][idx], obstacles_small[1][idx] # Get the obstacle.
+            for dx, dy in small_offsets: # For each small offset.
+                nx, ny = x + dx, y + dy # Get the new position.
+                if 0 <= nx < cspace_small.shape[0] and 0 <= ny < cspace_small.shape[1]: # If the new position is within the small configuration space.
+                    cspace_small[nx, ny] = 0.0 # Set the small configuration space to 0.0.
+        cspace_map = np.repeat(np.repeat(cspace_small, down_factor, axis=0), down_factor, axis=1) # Repeat the small configuration space.
+        cspace_map = cspace_map[: self.prob_map.shape[0], : self.prob_map.shape[1]] # Repeat the small configuration space.
+        self.memory.set("cspace_complete", True) # Set the cspace complete flag in memory.
+        print("Configuration space generation complete") # Print a message to the console.
+        return cspace_map # Return the configuration space.
+
+    def plan_path(self, start: Tuple[float, float], goal: Tuple[float, float]) -> List[Tuple[float, float]]:
+        """Simple A* path planning using C-space"""
+        cspace = self.memory.get("cspace")
+        if cspace is None:
+            return [goal]  # Fallback to direct navigation
+        
+        start_px = world_to_pixel(start[0], start[1])
+        goal_px = world_to_pixel(goal[0], goal[1])
+        
+        # Implement A* here
+        return self._astar(start_px, goal_px, cspace)
+
+    def _astar(self, start_px: Tuple[int, int], goal_px: Tuple[int, int], cspace: np.ndarray) -> List[Tuple[float, float]]:
+        """A* path planning algorithm"""
+        # Convert pixel coordinates back to world coordinates for the result
+        def pixel_to_world(px: int, py: int) -> Tuple[float, float]:
+            x = (px / 40.0) - 2.25
+            y = -((py / (-300 / 5.6666)) - 1.6633)
+            return (x, y)
+        
+        # Check if coordinates are valid and free
+        def is_valid(x: int, y: int) -> bool:
+            if x < 0 or x >= cspace.shape[0] or y < 0 or y >= cspace.shape[1]:
+                return False
+            return cspace[x, y] > 0.5  # Free space
+        
+        # Heuristic function (Euclidean distance)
+        def heuristic(x1: int, y1: int, x2: int, y2: int) -> float:
+            return np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+        
+        # 8-connected neighbors
+        neighbors = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+        
+        # Initialize data structures
+        open_set = [(0, start_px[0], start_px[1])] 
+        came_from = {}
+        g_cost = {start_px: 0}
+        f_cost = {start_px: heuristic(start_px[0], start_px[1], goal_px[0], goal_px[1])}
+        
+        while open_set:
+            current_f, current_x, current_y = heapq.heappop(open_set)
+            current = (current_x, current_y)
+            
+            # Check if we reached the goal
+            if current == goal_px:
+                # Reconstruct path
+                path = []
+                while current in came_from:
+                    path.append(pixel_to_world(current[0], current[1]))
+                    current = came_from[current]
+                path.append(pixel_to_world(start_px[0], start_px[1]))
+                path.reverse()
+                return path
+            
+            # Explore neighbors
+            for dx, dy in neighbors:
+                neighbor_x, neighbor_y = current_x + dx, current_y + dy
+                neighbor = (neighbor_x, neighbor_y)
+                
+                if not is_valid(neighbor_x, neighbor_y):
+                    continue
+                
+                # Calculate movement cost 
+                move_cost = 1.414 if abs(dx) + abs(dy) == 2 else 1.0
+                tentative_g = g_cost[current] + move_cost
+                
+                if neighbor not in g_cost or tentative_g < g_cost[neighbor]:
+                    came_from[neighbor] = current
+                    g_cost[neighbor] = tentative_g
+                    f_cost[neighbor] = tentative_g + heuristic(neighbor_x, neighbor_y, goal_px[0], goal_px[1])
+                    heapq.heappush(open_set, (f_cost[neighbor], neighbor_x, neighbor_y))
+        
+        # No path found, return direct path
+        print("A*: No path found, using direct navigation")
+        return [pixel_to_world(goal_px[0], goal_px[1])]
+
+    def _update_path_planning(self, current_pos: Tuple[float, float]) -> None:
+        """Update path planning when needed - ONLY during mapping phase"""
+        if not self.memory.get("cspace_complete", False):
+            return
+        
+        # CRITICAL: Only use path planning during mapping phase
+        system_instance = self.memory.get("system_instance")
+        if system_instance and hasattr(system_instance, 'state') and system_instance.state != "MAPPING":
+            self.use_path_planning = False
+            self.planned_path = []
+            return
+        
+        # Don't use path planning if jar picking has started 
+        if self.memory.get("jar_picking_started", False):
+            self.use_path_planning = False
+            return
+        
+        # Check if we need to plan a new path
+        if (self.current_wp_idx < len(self.waypoints) and 
+            (not self.planned_path or self.current_path_idx >= len(self.planned_path))):
+            
+            goal = self.waypoints[self.current_wp_idx]
+            print(f" Planning path from {current_pos} to goal {goal}")
+            self.planned_path = self.plan_path(current_pos, goal)
+            self.current_path_idx = 0
+            self.use_path_planning = True
+            print(f" Planned path with {len(self.planned_path)} waypoints to goal {goal}")
+
+    def _get_current_target(self, current_pos: Tuple[float, float]) -> Tuple[float, float]:
+        """Get the current target position (either from planned path or direct waypoint)"""
+        if self.use_path_planning and self.planned_path and self.current_path_idx < len(self.planned_path):
+            target = self.planned_path[self.current_path_idx]
+            print(f" Using A* waypoint {self.current_path_idx+1}/{len(self.planned_path)}: {target}")
+            return target
+        else:
+            # Fallback to direct waypoint navigation
+            if self.current_wp_idx < len(self.waypoints):
+                target = self.waypoints[self.current_wp_idx]
+                print(f" Using direct waypoint {self.current_wp_idx}: {target}")
+                return target
+            return current_pos
+
+
+class PerceptionController(RobotDeviceManager): # Perception controller.
+    def __init__(self, robot: Robot, memory: MemoryBoard) -> None: # Initialize the perception controller.
+        super().__init__(robot, memory) # Initialize the perception controller.
+        gps = getattr(robot, "getDevice", lambda name: None)('gps') # Get the gps device.
+        if gps: # If the gps device is found.
+            try: # Try to enable the gps device.
+                gps.enable(self.timestep) # Enable the gps device.
+            except Exception: # If the gps device is not found.
+                pass
+            self.memory.set("gps", gps) # Store the gps device in memory.
+        compass = getattr(robot, "getDevice", lambda name: None)('compass') # Get the compass device.
+        if compass: # If the compass device is found.
+            try: # Try to enable the compass device.
+                compass.enable(self.timestep) # Enable the compass device.
+            except Exception: # If the compass device is not found.
+                pass
+            self.memory.set("compass", compass) # Store the compass device in memory.
+        # Enable the camera and its recognition feature.
+        self.camera = getattr(robot, "getDevice", lambda name: None)("camera")
+        if self.camera:
+            try:
+                self.camera.enable(self.timestep) # Enable the camera device. 
+                # Enable object recognition if supported.
+                try:
+                    self.camera.recognitionEnable(self.timestep)  
+                except Exception:
+                    pass
+            except Exception:
+                self.camera = None
+        self.recognized_objects: List[Dict[str, object]] = [] # Initialize the recognized objects list.
+        self.distance_threshold = 0.1 # Initialize the distance threshold.
+
+    def update(self) -> str: # Update the perception controller.
+        if not self.camera: # If the camera device is not found.
+            return "FAILURE" # Return failure.
+        try: # Try to update the perception controller.
+            T_world_camera = self._get_camera_transform() # Get the camera transform.
+            objects = self.camera.getRecognitionObjects() # Get the recognition objects.
+            added = 0 # Initialize the added variable.
+            for obj in objects: # For each object.
+                pos_cam = np.array(list(obj.getPosition()) + [1]) # Get the position of the object.
+                pos_world = (T_world_camera @ pos_cam)[:3] # Get the position of the object in the world.
+                is_duplicate = any( # Check if the object is a duplicate.
+                    compute_distance(item["position"], pos_world) < self.distance_threshold # Check if the object is too close to the already recorded objects.
+                    for item in self.recognized_objects
+                )
+                if not is_duplicate: # If the object is not a duplicate.
+                    self.recognized_objects.append({
+                        "position": pos_world,
+                        "name": getattr(obj, 'model', 'Unknown'),
+                        "id": getattr(obj, 'id', -1)
+                    })
+                    added += 1
+            self.memory.set("recognized_objects", self.recognized_objects) # Store the recognized objects in memory.
+            return "SUCCESS" if added > 0 else "RUNNING" # Return success if the object is added, otherwise return running.
+        except Exception: # If the object is not found.
+            return "FAILURE" # Return failure.
+
+    def _get_camera_transform(self) -> np.ndarray: # Get the camera transform.
+        gps = self.memory.get("gps") # Get the gps device from memory.
+        compass = self.memory.get("compass") # Get the compass device from memory.
+        if not gps or not compass:
+            # Return identity if sensors aren't available.
+            return np.eye(4)
+        gps_values = gps.getValues() # Get the gps values.
+        compass_values = compass.getValues()
+        robot_x, robot_y, robot_z = gps_values
+        robot_theta = np.arctan2(compass_values[0], compass_values[1]) 
+        # Offset of the camera relative to the robot's base.
+        camera_offset_x = 0.1
+        camera_offset_z = 1.2
+        return np.array([
+            [np.cos(robot_theta), 0, np.sin(robot_theta), robot_x + camera_offset_x * np.cos(robot_theta)],
+            [0, 1, 0, robot_y],
+            [-np.sin(robot_theta), 0, np.cos(robot_theta), robot_z + camera_offset_z],
+            [0, 0, 0, 1]
+        ])
+
+
+class MapDisplay:
+    def __init__(self, memory: MemoryBoard) -> None:
+        self.memory = memory
+        self.display = None
+        self.width = 0
+        self.height = 0
+        self.COLOR_BLACK = 0x000000 # Black color.
+        self.COLOR_WHITE = 0xFFFFFF # White color.
+        self.COLOR_RED = 0xFF0000 # Red color.
+        self.COLOR_GREEN = 0x00FF00 # Green color.
+        self.COLOR_BLUE = 0x0000FF
+
+    def update(self) -> None: # Update the display.
+        self.display = self.memory.get("display") # Get the display device from memory.
+        if not self.display: # If the display device is not found.
+            return
+        self.width = self.display.getWidth() # Get the width of the display.
+        self.height = self.display.getHeight() # Get the height of the display.
+        self.display.setColor(self.COLOR_BLACK)
+        self.display.fillRectangle(0, 0, self.width, self.height) # Clear the display.
+        cspace = self.memory.get("cspace") # Get the configuration space from memory.
+        if cspace is not None: # If the configuration space is found.
+            self._draw_cspace(cspace) # Draw the configuration space.
+        else:
+            prob_map = self.memory.get("prob_map") # Get the probability map from memory.
+            if prob_map is not None: # If the probability map is found.
+                self._draw_probability_map(prob_map) # Draw the probability map.
+        trajectory = self.memory.get("trajectory_points") # Get the trajectory from memory.
+        if trajectory: # If the trajectory is found.
+            self._draw_trajectory(trajectory) # Draw the trajectory.
+        
+        # Draw planned path if available
+        system_instance = self.memory.get("system_instance")
+        if system_instance and hasattr(system_instance, 'navigation') and system_instance.navigation:
+            if system_instance.navigation.planned_path:
+                self._draw_planned_path(system_instance.navigation.planned_path)
+        
+        self._draw_robot() # Draw the robot.
+
+    def _draw_probability_map(self, prob_map: np.ndarray) -> None: # Draw the probability map.
+        for x in range(0, prob_map.shape[0], 2): # For each x.
+            for y in range(0, prob_map.shape[1], 2): # For each y.
+                if prob_map[x, y] > 0.001: # If the probability is greater than 0.001.
+                    intensity = int(255 * min(prob_map[x, y] * 2.5, 0.8)) # Get the intensity.
+                    color = (intensity << 16) | (intensity << 8) | intensity # Get the color.
+                    self.display.setColor(color) # Set the color.
+                    dx, dy = self._map_to_display(x, y, prob_map.shape) # Get the display coordinates.
+                    if 0 <= dx < self.width and 0 <= dy < self.height: # If the display coordinates are within the display.
+                        self.display.fillRectangle(dx, dy, 2, 2) # Draw the probability map.
+
+    def _draw_cspace(self, cspace: np.ndarray) -> None: # Draw the configuration space.
+        step = 2 # Get the step.
+        for x in range(0, cspace.shape[0], step): # For each x.
+            for y in range(0, cspace.shape[1], step): # For each y.
+                if cspace[x, y] < 0.5: # If the configuration space is less than 0.5.
+                    self.display.setColor(self.COLOR_WHITE) # Set the color to white.
+                    dx, dy = self._map_to_display(x, y, cspace.shape) # Get the display coordinates.
+                    if 0 <= dx < self.width and 0 <= dy < self.height: # If the display coordinates are within the display.
+                        self.display.fillRectangle(dx, dy, step, step) # Draw the configuration space.
+
+    def _draw_trajectory(self, trajectory: List[Tuple[float, float]]) -> None: # Draw the trajectory.
+        self.display.setColor(self.COLOR_RED) # Set the color to red.
+        for i in range(len(trajectory) - 1): # For each trajectory.
+            x1, y1 = trajectory[i] # Get the trajectory.
+            x2, y2 = trajectory[i + 1]
+            px1, py1 = world_to_pixel(x1, y1)
+            px2, py2 = world_to_pixel(x2, y2)
+            dx1, dy1 = self._map_to_display(px1, py1, (RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE))
+            dx2, dy2 = self._map_to_display(px2, py2, (RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE))
+            if (
+                0 <= dx1 < self.width and 0 <= dy1 < self.height and
+                0 <= dx2 < self.width and 0 <= dy2 < self.height
+            ):
+                self.display.drawLine(dx1, dy1, dx2, dy2)
+
+    def _draw_planned_path(self, planned_path: List[Tuple[float, float]]) -> None: # Draw the planned path.
+        self.display.setColor(self.COLOR_BLUE) # Set the color to blue.
+        for i in range(len(planned_path) - 1): # For each waypoint in the planned path.
+            x1, y1 = planned_path[i] # Get the current waypoint.
+            x2, y2 = planned_path[i + 1] # Get the next waypoint.
+            px1, py1 = world_to_pixel(x1, y1) # Convert to pixel coordinates.
+            px2, py2 = world_to_pixel(x2, y2) # Convert to pixel coordinates.
+            dx1, dy1 = self._map_to_display(px1, py1, (RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE)) # Convert to display coordinates.
+            dx2, dy2 = self._map_to_display(px2, py2, (RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE)) # Convert to display coordinates.
+            if (
+                0 <= dx1 < self.width and 0 <= dy1 < self.height and
+                0 <= dx2 < self.width and 0 <= dy2 < self.height
+            ):
+                self.display.drawLine(dx1, dy1, dx2, dy2) # Draw the line.
+
+    def _draw_robot(self) -> None:
+        gps = self.memory.get("gps") # Get the gps device from memory.
+        compass = self.memory.get("compass") # Get the compass device from memory.
+        if not gps or not compass: # If the gps or compass device is not found.
+            return
+        pos = gps.getValues() # Get the gps values.
+        px, py = world_to_pixel(pos[0], pos[1]) # Get the pixel coordinates.
+        dx, dy = self._map_to_display(px, py, (RobotConfig.MAP_WIDTH, RobotConfig.MAP_SIZE)) # Get the display coordinates.
+        if 0 <= dx < self.width and 0 <= dy < self.height: # If the display coordinates are within the display.
+            self.display.setColor(self.COLOR_GREEN) # Set the color to green.
+            self.display.fillRectangle(dx - 2, dy - 2, 5, 5) # Draw the robot.
+            angle = np.arctan2(compass.getValues()[0], compass.getValues()[1]) # Get the angle.
+            end_x = dx + int(10 * np.cos(angle)) # Get the end x.
+            end_y = dy + int(10 * np.sin(angle)) # Get the end y.
+            self.display.setColor(self.COLOR_WHITE) # Set the color to white.
+            self.display.drawLine(dx, dy, end_x, end_y) # Draw the robot.
+
+    def _map_to_display(
+        self, px: int, py: int, map_shape: Tuple[int, int]
+    ) -> Tuple[int, int]: # Map the probability/c-space coordinates to display coordinates.
+        dx = int(px * self.width / map_shape[0]) # Get the display x.
+        dy = int(py * self.height / map_shape[1]) # Get the display y.
+        return dx, dy
+
+
+class RobotController:
+    def __init__(self) -> None: # Initialize the robot controller.
+        self.robot = Robot() # Create a robot instance from Webots.
+        self.timestep = int(getattr(self.robot, "getBasicTimeStep", lambda: 32)()) # Get the timestep.
+        self.memory = MemoryBoard() # Create a memory board.
+        self.memory.set("robot", self.robot) # Set the robot in memory.
+        self.memory.set("timestep", self.timestep) # Set the timestep in memory.
+        self.navigation: Optional[NavigationController] = None # Initialize the navigation controller.
+        self.pickplace: Optional[PickPlaceController] = None # Initialize the pick place controller.
+        self.perception: Optional[PerceptionController] = None # Initialize the perception controller.
+        self.display: Optional[MapDisplay] = None # Initialize the map display.
+        self.state = "MAPPING"
+        self.step_counter = 0
+        self.display_static = False
+        self.behavior_tree: Optional[py_trees.trees.BehaviourTree] = None
+
+    def _initialize_devices(self) -> None: # Initialize the devices.
+        gps = getattr(self.robot, "getDevice", lambda name: None)('gps') # Get the gps device.
+        if gps: # If the gps device is found.
+            try: # Try to enable the gps device.
+                gps.enable(self.timestep) # Enable the gps device.
+            except Exception: # If the gps device is not found.
+                pass
+            self.memory.set("gps", gps) # Set the gps device in memory.
+        compass = getattr(self.robot, "getDevice", lambda name: None)('compass') # Get the compass device.
+        if compass: # If the compass device is found.
+            try: # Try to enable the compass device.
+                compass.enable(self.timestep)
+            except Exception:
+                pass
+            self.memory.set("compass", compass) # Set the compass device in memory.
+        motorL = getattr(self.robot, "getDevice", lambda name: None)("wheel_left_joint") # Get the left motor.
+        if motorL: # If the left motor is found.
+            try: # Try to set the left motor to velocity control mode.
+                motorL.setPosition(float('inf'))
+            except Exception:
+                pass
+        motorR = getattr(self.robot, "getDevice", lambda name: None)("wheel_right_joint")
+        if motorR:
+            try:
+                motorR.setPosition(float('inf'))
+            except Exception:
+                pass
+        self.memory.set("motorL", motorL)
+        self.memory.set("motorR", motorR)
+        for name in ["Hokuyo URG-04LX-UG01", "lidar"]: # For each lidar device.
+            try: # Try to enable the lidar device.
+                lidar = getattr(self.robot, "getDevice", lambda name: None)(name) # Get the lidar device.
+                if lidar: # If the lidar device is found.
+                    try: # Try to enable the lidar device.
+                        lidar.enable(self.timestep) # Enable the lidar device.
+                    except Exception: # If the lidar device is not found.
+                        pass
+                    self.memory.set("lidar", lidar)
+                    break
+            except Exception:
+                continue
+        # Display for map rendering.
+        display = getattr(self.robot, "getDevice", lambda name: None)("display") # Get the display device.
+        if display: # If the display device is found.
+            self.memory.set("display", display) # Set the display device in memory.
+        # Camera device.
+        camera = getattr(self.robot, "getDevice", lambda name: None)("camera") # Get the camera device.
+        if camera: # If the camera device is found.
+            try: # Try to enable the camera device.
+                camera.enable(self.timestep) # Enable the camera device.
+            except Exception:
+                pass
+            self.memory.set("camera", camera) # Set the camera device in memory.
+        # Bind arm motors and enable position sensors.
+        arm_motors: Dict[str, object] = {} # Initialize the arm motors.
+        joint_names = [
+            'torso_lift_joint', 'arm_1_joint', 'arm_2_joint', 'arm_3_joint',
+            'arm_4_joint', 'arm_5_joint', 'arm_6_joint', 'arm_7_joint',
+            'gripper_left_finger_joint', 'gripper_right_finger_joint',
+            'head_1_joint', 'head_2_joint'
+        ]
+        for joint in joint_names:
+            try:
+                motor = getattr(self.robot, "getDevice", lambda name: None)(joint)
+                if motor:
+                    arm_motors[joint] = motor
+                    try:
+                        sensor = motor.getPositionSensor()
+                        if sensor:
+                            sensor.enable(self.timestep)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Enable dedicated sensors on the gripper fingers if available.
+        for sensor_name in ['gripper_left_sensor_finger_joint', 'gripper_right_sensor_finger_joint']:
+            try:
+                sensor = getattr(self.robot, "getDevice", lambda name: None)(sensor_name)
+                if sensor:
+                    sensor.enable(self.timestep)
+            except Exception:
+                pass
+        self.memory.set("arm_motors", arm_motors)
+
+    def initialize(self) -> bool:
+        #Initialise subsystems and behaviour tree.
+        try:
+            self._initialize_devices()
+            # Create subsystem controllers.
+            self.navigation = NavigationController(self.robot, self.memory)
+            self.pickplace = PickPlaceController(self.robot, self.memory)
+            self.perception = PerceptionController(self.robot, self.memory)
+            self.display = MapDisplay(self.memory)
+            # Build a behaviour tree: first run mapping, then pick/place.
+            root = py_trees.composites.Sequence(name="RootSequence", memory=True)
+            mapping_action = BTAction(self._bt_mapping)
+            pick_action = BTAction(self._bt_pickplace)
+            root.add_children([mapping_action, pick_action])
+            self.behavior_tree = py_trees.trees.BehaviourTree(root)
+            try:
+                self.behavior_tree.setup(timeout=5)
+            except Exception as e:
+                print(f"[Behaviour tree setup failed: {e}")
+            return True
+        except Exception as e:
+            print(f"Initialization failed: {e}")
+            return False
+
+    def run(self) -> bool:
+        """Main control loop.  Returns False if initialization fails."""
+        if not self.initialize():
+            return False
+        print("Starting main control loop.")
+        # Expose this instance on the memory board for other subsystems.
+        self.memory.set("system_instance", self)
+        try:
+            while getattr(self.robot, "step", lambda x: -1)(self.timestep) != -1:
+                self.step_counter += 1
+                # Update the perception controller on every step.
+                if self.perception:
+                    self.perception.update()
+                # Tick the behaviour tree.
+                if self.behavior_tree:
+                    self.behavior_tree.tick()
+                    # When the tree completes, update the state.
+                    if self.behavior_tree.root.status == py_trees.common.Status.SUCCESS:
+                        self.state = "COMPLETE"
+                # Periodically draw to the display.
+                if (
+                    self.display and not self.display_static and
+                    self.step_counter % 15 == 0
+                ):
+                    self.display.update()
+                # Exit after a large number of steps to avoid infinite loops.
+                if self.step_counter > 20000:
+                    print("Maximum step count reached, stopping execution.")
+                    break
+                # When complete, stop the robot.
+                if self.state == "COMPLETE":
+                    print("Task complete. Robot is now idle in safe position.")
+                    break
+        except KeyboardInterrupt:
+            print("Interrupted by user.")
+            pass
+        finally:
+            self._cleanup()
+        return True
+
+    def _bt_mapping(self) -> str:
+        #Behaviour tree leaf: run mapping until complete
+        if not self.navigation:
+            return "FAILURE"
+        result = self.navigation.execute_mapping()
+        if result == "SUCCESS":
+            self.state = "MANIPULATION"
+            print("Navigation and mapping phase completed successfully.")
+            # Take a snapshot of the map and stop updating it.
+            if self.display and not self.display_static:
+                self.display.update()
+                self.display_static = True
+            return "SUCCESS"
+        elif result == "FAILURE":
+            print("Navigation and mapping phase failed.")
+            return "FAILURE"
+        return "RUNNING"
+
+    def _bt_pickplace(self) -> str:
+        if not self.pickplace:
+            return "FAILURE"
+        result = self.pickplace.run()
+        if result == "SUCCESS":
+            print("Pick and place operations completed successfully.")
+            return "SUCCESS"
+        elif result == "FAILURE":
+            print("Pick and place operations failed.")
+            return "FAILURE"
+        return "RUNNING"
+
+    def _cleanup(self) -> None:
+        print("Cleaning up and stopping all motors")
+        motorL = self.memory.get("motorL")
+        motorR = self.memory.get("motorR")
+        if motorL and motorR:
+            try:
+                motorL.setVelocity(0.0)
+                motorR.setVelocity(0.0)
+                print("Wheel motors stopped successfully")
+            except Exception:
+                print("Warning - could not stop wheel motors")
+                pass
+        print("Cleanup complete")
+
+
+
+def main() -> None: # Main function to run the robot.
+    print("Starting autonomous navigation and manipulation system")
+    controller = RobotController()
+    controller.run()
+    print("System shutdown complete.")
+
+if __name__ == "__main__": # If the script is run directly, run the main function.
+    main()
