@@ -1,21 +1,3 @@
-<!-- Badge Start -->
-
-<div align="center">
-  <a href="https://github.com/soph-k" target="_blank" rel="noopener noreferrer">
-    <img alt="Made by Soph" src="https://img.shields.io/badge/Made%20by-Soph-ff69b4?style=for-the-badge" />
-  </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
-    <img alt="MIT License" src="https://img.shields.io/github/license/soph-k/tiago-mapping-planning?style=for-the-badge" />
-  </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
-    <img alt="Last commit" src="https://img.shields.io/github/last-commit/soph-k/tiago-mapping-planning?style=for-the-badge" />
-  </a>
-  <a href="https://github.com/soph-k/tiago-mapping-planning" target="_blank" rel="noopener noreferrer">
-    <img alt="Repo size" src="https://img.shields.io/github/repo-size/soph-k/tiago-mapping-planning?style=for-the-badge" />
-  </a>
-</div>
-<!-- Badge End -->
-
 <div id="top"></div>
 
 <br>
@@ -683,6 +665,7 @@ Distributed under the MIT License. See [`LICENSE`](./LICENSE) for details.
 - NumPy, SciPy, and Pillow for numerical and image-processing utilities
 - Claude AI was used as a debugging aid for a C-space map-loading and metadata issue; the result was reviewed, adapted, and integrated by Soph
 
+This project was developed as an **Advanced Robotics course final assignment**.
 
 <br>
 
