@@ -49,10 +49,6 @@
   <a href="./controllers/main">
     <strong>View Controller »</strong>
   </a>
-  &nbsp; • &nbsp;
-  <a href="./worlds/kitchen.wbt">
-    <strong>Open Webots World »</strong>
-  </a>
 </p>
 
 </div>
@@ -217,22 +213,6 @@ work reliably inside one continuously running robotics system.
 <br>
 
 <sub>Navigation and camera-recognition view</sub>
-
-</td>
-
-<td width="38%" align="center" valign="middle">
-
-<a href="./assets/images/preview.jpg">
-  <img
-    src="./assets/images/preview.jpg"
-    width="96%"
-    alt="TIAGo operating inside the simulated kitchen"
-  />
-</a>
-
-<br>
-
-<sub>TIAGo inside the kitchen environment</sub>
 
 </td>
 
@@ -665,7 +645,6 @@ Distributed under the MIT License. See [`LICENSE`](./LICENSE) for details.
 - NumPy, SciPy, and Pillow for numerical and image-processing utilities
 - Claude AI was used as a debugging aid for a C-space map-loading and metadata issue; the result was reviewed, adapted, and integrated by Soph
 
-This project was developed as an **Advanced Robotics course final assignment**.
 
 <br>
 
