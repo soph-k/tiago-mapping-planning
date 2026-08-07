@@ -202,9 +202,9 @@ work reliably inside one continuously running robotics system.
 
 <td width="62%" align="center" valign="middle">
 
-<a href="./assets/images/preview_demo.jpg">
+<a href="./assets/images/preview.jpg">
   <img
-    src="./assets/images/preview_demo.jpg"
+    src="./assets/images/preview.jpg"
     width="96%"
     alt="TIAGo simulation with navigation and camera-recognition display"
   />
